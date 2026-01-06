@@ -30,7 +30,8 @@ def load_model_tokenizer_config(
     model_name: str, 
     device: Optional[str] = None,
     padding_side: str = "left",
-    attn_type: str = "sdpa"
+    attn_type: str = "sdpa",
+    suffix: str = ""
 ) -> Tuple[Envoy, ChatTemplateTokenizer, PretrainedConfig]:
     """
     Load a Hugging Face model, tokenizer, and config by name.
@@ -40,6 +41,7 @@ def load_model_tokenizer_config(
         device: The device to load the model on. If None, defaults to 'cuda' if available, otherwise 'cpu'.
         padding_side: The side to pad the tokenizer on.
         attn_type: The attention implementation to use.
+        suffix: A suffix to append to the model name.
 
     Returns:
         A tuple containing the NNsight-wrapped model, the chat tokenizer, and the model config.
@@ -48,7 +50,7 @@ def load_model_tokenizer_config(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     config = AutoConfig.from_pretrained(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, padding_side=padding_side)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, padding_side=padding_side, suffix=suffix)
     tokenizer = ChatTemplateTokenizer(tokenizer)
     config._attn_implementation = attn_type
     if attn_type == "eager":
