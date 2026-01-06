@@ -1,0 +1,21 @@
+[project]
+name = "mech-interp-toolkit"
+version = "0.0.1"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "einops>=0.8.1",
+    "pytest>=9.0.2",
+    "scikit-learn>=1.8.0",
+    "transformers>=4.57.3",
+    "nnsight>=0.1",
+    "twine>=6.2.0",
+]
+authors = [
+  { name="Shantanu Darveshi", email="shantanu.darveshi@gmail.com" },
+]
+description = "Mech. Interp. utility kit"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["mech_interp_toolkit"]
