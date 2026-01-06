@@ -53,7 +53,7 @@ clean_activations, clean_logits = get_activations(model, inputs, layers_componen
 
 # Create a patch dictionary with zeroed activations
 patch_dict = ActivationDict(config, positions=position)
-patch_dict[(0, "attn")] = torch.zeros_like(clean_activations[(0, "attn")])
+patch_dict[(0, "attn")] = torch.zeros_like(clean_activations[(0, "attn")], device="cuda")
 
 # Patch the model and get patched logits
 patched_logits = patch_activations(model, inputs, patch_dict, position=position)
