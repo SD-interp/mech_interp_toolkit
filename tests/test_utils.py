@@ -39,7 +39,7 @@ def test_load_model_tokenizer_config(mock_nnsight, mock_model, mock_tokenizer, m
     assert tokenizer is not None
     assert config is not None
     mock_config.assert_called_with("test-model")
-    mock_tokenizer.assert_called_with("test-model", use_fast=True, padding_side="left")
+    mock_tokenizer.assert_called_with("test-model", use_fast=True, padding_side="left", suffix="")
     mock_model.assert_called_with("test-model", config=mock_config.return_value)
     mock_nnsight.assert_called_with(model_mock)
 

@@ -2,7 +2,7 @@ import pytest
 import torch
 import numpy as np
 from unittest.mock import MagicMock, PropertyMock, patch
-from mech_interp_toolkit.interpret import ActivationDict, FrozenError, train_linear_probe
+from mech_interp_toolkit.interpret import ActivationDict, FrozenError, LinearProbe
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 @pytest.fixture
@@ -84,35 +84,54 @@ def test_create_z_patch_dict(activation_dict, mock_config):
     assert (0, "z") in patch_dict
     assert torch.allclose(patch_dict[(0,"z")].view(1,10,4,32)[:,5,1,:], torch.ones(1, 32))
 
-def test_train_linear_probe_classification(activation_dict):
-    """Tests the train_linear_probe function for classification."""
-    input_dict = ActivationDict(activation_dict.config, positions=None)
-    input_dict[(0, "z")] = torch.randn(100, 128)
+def test_linear_probe_classification(mock_config):
+    """Tests the LinearProbe class for classification."""
+    input_dict = ActivationDict(mock_config, positions=None)
+    input_dict[(0, "z")] = torch.randn(100, 1, 128)
     target = np.random.randint(0, 2, 100)
     
-    model = train_linear_probe(input_dict, target, target_type="classification", random_state=42)
-    assert model is not None
-    assert hasattr(model, "predict")
+    probe = LinearProbe(target_type="classification")
+    probe.fit(input_dict, target)
+    
+    assert probe.linear_model is not None
+    assert probe.weight is not None
+    assert probe.bias is not None
+    
+    # Test predict
+    new_input_dict = ActivationDict(mock_config, positions=None)
+    new_input_dict[(0, "z")] = torch.randn(10, 1, 128)
+    predictions = probe.predict(new_input_dict)
+    assert predictions.shape == (10,)
 
-def test_train_linear_probe_regression(activation_dict):
-    """Tests the train_linear_probe function for regression."""
-    input_dict = ActivationDict(activation_dict.config, positions=None)
-    input_dict[(0, "z")] = torch.randn(100, 128)
+def test_linear_probe_regression(mock_config):
+    """Tests the LinearProbe class for regression."""
+    input_dict = ActivationDict(mock_config, positions=None)
+    input_dict[(0, "z")] = torch.randn(100, 1, 128)
     target = np.random.rand(100)
     
-    model = train_linear_probe(input_dict, target, target_type="regression", random_state=42)
-    assert model is not None
-    assert hasattr(model, "predict")
+    probe = LinearProbe(target_type="regression")
+    probe.fit(input_dict, target)
+    
+    assert probe.linear_model is not None
+    assert probe.weight is not None
+    assert probe.bias is not None
 
-def test_train_linear_probe_value_error(activation_dict):
-    """Tests that train_linear_probe raises ValueError for more than one component."""
-    input_dict = ActivationDict(activation_dict.config, positions=None)
+    # Test predict
+    new_input_dict = ActivationDict(mock_config, positions=None)
+    new_input_dict[(0, "z")] = torch.randn(10, 1, 128)
+    predictions = probe.predict(new_input_dict)
+    assert predictions.shape == (10,)
+
+def test_linear_probe_value_error(mock_config):
+    """Tests that LinearProbe raises ValueError for more than one component."""
+    input_dict = ActivationDict(mock_config, positions=None)
     input_dict[(0, "z")] = torch.randn(100, 128)
     input_dict[(1, "z")] = torch.randn(100, 128)
     target = np.random.rand(100)
     
+    probe = LinearProbe(target_type="regression")
     with pytest.raises(ValueError):
-        train_linear_probe(input_dict, target, target_type="regression")
+        probe.fit(input_dict, target)
 
 def test_get_pre_rms_logit_diff_direction():
     """Tests the get_pre_rms_logit_diff_direction function."""
