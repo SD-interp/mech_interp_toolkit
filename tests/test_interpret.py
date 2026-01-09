@@ -224,3 +224,48 @@ def test_get_attention_pattern(mock_config):
             mock_trace.return_value.__enter__.return_value = mock_trace
             patterns = get_attention_pattern(mock_model, {}, [0], [(0,1)])
             assert patterns is not None
+
+@patch('mech_interp_toolkit.interpret.input_dict_to_tuple')
+def test_integrated_gradients(mock_input_dict_to_tuple, mock_config):
+    """Tests the integrated_gradients function."""
+    from mech_interp_toolkit.interpret import integrated_gradients
+    
+    input_ids = torch.randint(0, 100, (1, 5))
+    hidden_size = mock_config.hidden_size
+    mock_input_dict_to_tuple.return_value = (input_ids, torch.ones(1, 5), torch.arange(5))
+
+    mock_model = MagicMock()
+    
+    # Mock embedding layer and its output
+    embedding_layer = MagicMock()
+    input_embeddings = torch.rand(1, 5, hidden_size)
+    embedding_layer.return_value = input_embeddings
+    mock_model.model.get_input_embeddings.return_value = embedding_layer
+    
+    with patch.object(mock_model, 'trace') as mock_trace, \
+         patch('torch.autograd.grad') as mock_grad:
+        
+        # Setup mock for trace
+        mock_logits_proxy = MagicMock()
+        mock_logits_proxy.value = torch.rand(1, 100) # dummy logits
+        
+        mock_trace.return_value.__enter__.return_value.lm_head.output.__getitem__.return_value.__getitem__.return_value.save.return_value = mock_logits_proxy
+
+        # Setup mock for grad to return a constant tensor of ones.
+        mock_grad.return_value = [torch.ones(1, 5, hidden_size)]
+
+        steps = 4
+        result = integrated_gradients(mock_model, {}, target_id=0, steps=steps)
+
+        # Check shape
+        assert result.shape == (1, 5, hidden_size)
+
+        # Check call counts
+        assert mock_trace.call_count == steps + 1
+        assert mock_grad.call_count == steps + 1
+
+        # Check the actual value.
+        # total_grads will be (steps + 1) * ones_tensor.
+        # avg_grads will be ones_tensor.
+        # result = (input_embeddings - 0) * avg_grads = input_embeddings
+        assert torch.allclose(result, input_embeddings)
