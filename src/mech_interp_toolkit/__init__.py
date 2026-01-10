@@ -8,10 +8,10 @@ __version__ = "0.1.0"
 
 from . import tokenizer
 from . import utils
-from . import interpret
+from . import direct_logit_attribution
 
 __all__ = [
     "tokenizer",
     "utils",
-    "interpret",
+    "direct_logit_attribution",
 ]

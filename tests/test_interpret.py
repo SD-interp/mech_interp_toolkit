@@ -1,8 +1,8 @@
 import pytest
 import torch
 import numpy as np
-from unittest.mock import MagicMock, PropertyMock, patch
-from mech_interp_toolkit.interpret import ActivationDict, FrozenError, LinearProbe
+from unittest.mock import MagicMock, patch
+from mech_interp_toolkit.direct_logit_attribution import ActivationDict, FrozenError, LinearProbe
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 @pytest.fixture
@@ -135,7 +135,7 @@ def test_linear_probe_value_error(mock_config):
 
 def test_get_pre_rms_logit_diff_direction():
     """Tests the get_pre_rms_logit_diff_direction function."""
-    from mech_interp_toolkit.interpret import get_pre_rms_logit_diff_direction
+    from mech_interp_toolkit.direct_logit_attribution import get_pre_rms_logit_diff_direction
     
     mock_model = MagicMock()
     mock_model.get_output_embeddings.return_value.weight = torch.randn(100, 128)
@@ -150,7 +150,7 @@ def test_get_pre_rms_logit_diff_direction():
 @patch('mech_interp_toolkit.interpret.input_dict_to_tuple')
 def test_get_activations(mock_input_dict_to_tuple, mock_config):
     """Tests the get_activations function."""
-    from mech_interp_toolkit.interpret import get_activations
+    from mech_interp_toolkit.direct_logit_attribution import get_activations
     
     mock_input_dict_to_tuple.return_value = (torch.randint(0, 100, (1, 10)), torch.ones(1, 10), torch.arange(10))
 
@@ -165,7 +165,7 @@ def test_get_activations(mock_input_dict_to_tuple, mock_config):
 @patch('mech_interp_toolkit.interpret.input_dict_to_tuple')
 def test_patch_activations(mock_input_dict_to_tuple, activation_dict, mock_config):
     """Tests the patch_activations function."""
-    from mech_interp_toolkit.interpret import patch_activations
+    from mech_interp_toolkit.direct_logit_attribution import patch_activations
 
     mock_input_dict_to_tuple.return_value = (torch.randint(0, 100, (1, 10)), torch.ones(1, 10), torch.arange(10))
 
@@ -186,7 +186,7 @@ def test_patch_activations(mock_input_dict_to_tuple, activation_dict, mock_confi
 
 def test_run_layerwise_dla():
     """Tests the run_layerwise_dla function."""
-    from mech_interp_toolkit.interpret import run_layerwise_dla
+    from mech_interp_toolkit.direct_logit_attribution import run_layerwise_dla
     with patch('mech_interp_toolkit.interpret.input_dict_to_tuple') as mock_input_dict:
         mock_input_dict.return_value = (torch.zeros(1,1), torch.zeros(1,1), torch.zeros(1,1))
         mock_model = MagicMock()
@@ -200,7 +200,7 @@ def test_run_layerwise_dla():
 
 def test_run_headwise_dla_for_layer():
     """Tests the run_headwise_dla_for_layer function."""
-    from mech_interp_toolkit.interpret import run_headwise_dla_for_layer
+    from mech_interp_toolkit.direct_logit_attribution import run_headwise_dla_for_layer
     with patch('mech_interp_toolkit.interpret.input_dict_to_tuple') as mock_input_dict:
         mock_input_dict.return_value = (torch.zeros(1,1), torch.zeros(1,1), torch.zeros(1,1))
         mock_model = MagicMock()
@@ -215,7 +215,7 @@ def test_run_headwise_dla_for_layer():
 
 def test_get_attention_pattern(mock_config):
     """Tests the get_attention_pattern function."""
-    from mech_interp_toolkit.interpret import get_attention_pattern
+    from mech_interp_toolkit.direct_logit_attribution import get_attention_pattern
     with patch('mech_interp_toolkit.interpret.input_dict_to_tuple') as mock_input_dict:
         mock_input_dict.return_value = (torch.zeros(1,1), torch.zeros(1,1), torch.zeros(1,1))
         mock_model = MagicMock()
@@ -228,7 +228,7 @@ def test_get_attention_pattern(mock_config):
 @patch('mech_interp_toolkit.interpret.input_dict_to_tuple')
 def test_integrated_gradients(mock_input_dict_to_tuple, mock_config):
     """Tests the integrated_gradients function."""
-    from mech_interp_toolkit.interpret import integrated_gradients
+    from mech_interp_toolkit.direct_logit_attribution import integrated_gradients
     
     input_ids = torch.randint(0, 100, (1, 5))
     hidden_size = mock_config.hidden_size
