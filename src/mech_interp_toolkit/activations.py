@@ -1,10 +1,11 @@
 import torch
 from nnsight import NNsight
-from .utils import input_dict_to_tuple
+from .utils import input_dict_to_tuple, regularize_position
 from collections.abc import Sequence, Callable
 import warnings
 from typing import Optional
 import einops
+
 
 class FrozenError(RuntimeError):
     """Raised when attempting to modify a frozen ActivationDict."""
@@ -36,6 +37,26 @@ class ActivationDict(dict):
         self.fused_heads = True
         self.positions = positions
         self._frozen = False
+
+    def reorganize(self):
+        execution_order = {
+            "layer_in": 0,
+            "z": 1,
+            "attn": 2,
+            "mlp": 3,
+            "layer_out": 4,
+        }
+
+        new_dict = ActivationDict(self.config, self.positions)
+        keys = list(self.keys())
+        keys = sorted(
+            keys,
+            key=lambda x: (x[0], execution_order[x[1]]),
+        )
+
+        for key in keys:
+            new_dict[key] = self[key]
+        return new_dict
 
     def freeze(self):
         """Freeze the ActivationDict, making it immutable."""
@@ -127,16 +148,12 @@ class ActivationDict(dict):
         self._frozen = pre_state
         return self
 
-    def get_mean_activations(self) -> dict:
-        """
-        Computes the mean of activations across the batch dimension.
-
-        Returns:
-            A dictionary with the same keys but with mean activations.
-        """
+    def apply(
+        self, function: Callable[[torch.Tensor, int], torch.Tensor], dim: int = -1
+    ) -> dict:
         output = dict()
         for layer, component in self.keys():
-            output[(layer, component)] = self[(layer, component)].mean(dim=0)
+            output[(layer, component)] = function(self[(layer, component)], dim=dim)
         return output
 
     def cuda(self):
@@ -145,69 +162,76 @@ class ActivationDict(dict):
             self[key] = self[key].cuda()
         return self
 
-    def create_z_patch_dict(
-        self,
-        new_acts,
-        layer_head: list[tuple[int, int]],
-        position: None | int | Sequence[int] | slice = None,
-    ):
-        """
-        Creates a new ActivationDict for patching 'z' activations.
+    def cpu(self):
+        """Moves all activation tensors to the CPU."""
+        for key in self.keys():
+            self[key] = self[key].cpu()
+        return self
 
-        Args:
-            new_acts: An ActivationDict containing the new activations.
-            layer_head: A list of (layer, head) tuples to patch.
-            position: The sequence position(s) to patch.
 
-        Returns:
-            A new ActivationDict with the patched activations.
-        """
-        assert not (self.fused_heads or new_acts.fused_heads), (
-            "Both ActivationDicts must have unfused heads for patching."
-        )
+def create_z_patch_dict(
+    original_acts,
+    new_acts,
+    layer_head: list[tuple[int, int]],
+    position: None | int | Sequence[int] | slice = None,
+):
+    """
+    Creates a new ActivationDict for patching 'z' activations.
 
-        if isinstance(position, int):
-            position = [position]
+    Args:
+        new_acts: An ActivationDict containing the new activations.
+        layer_head: A list of (layer, head) tuples to patch.
+        position: The sequence position(s) to patch.
 
-        if isinstance(position, Sequence):
+    Returns:
+        A new ActivationDict with the patched activations.
+    """
+    assert not (original_acts.fused_heads or new_acts.fused_heads), (
+        "Both ActivationDicts must have unfused heads for patching."
+    )
 
-            def check_pos(pos_spec, pos_list):
-                if isinstance(pos_spec, slice):
-                    if pos_spec.start is None and pos_spec.stop is None:
-                        return True
+    if isinstance(position, int):
+        position = [position]
 
-                    # Assume positive indices
-                    max_pos = 0
-                    if pos_list:
-                        max_pos = max(pos_list)
+    if isinstance(position, Sequence):
 
-                    start, stop, step = pos_spec.indices(max_pos + 1)
-                    return all(p in range(start, stop, step) for p in pos_list)
-                else:
-                    return all(p in pos_spec for p in pos_list)
+        def check_pos(pos_spec, pos_list):
+            if isinstance(pos_spec, slice):
+                if pos_spec.start is None and pos_spec.stop is None:
+                    return True
 
-            self_check = check_pos(self.positions, position)
-            new_check = check_pos(new_acts.positions, position)
+                # Assume positive indices
+                max_pos = 0
+                if pos_list:
+                    max_pos = max(pos_list)
 
-            if not self_check or not new_check:
-                raise ValueError("For cross-position patching, implement custom logic.")
-        elif position is None:
-            if self.positions != new_acts.positions:
-                warnings.warn(
-                    "Patching all positions but ActivationDicts have different position sets."
-                )
-            position = slice(None)
+                start, stop, step = pos_spec.indices(max_pos + 1)
+                return all(p in range(start, stop, step) for p in pos_list)
+            else:
+                return all(p in pos_spec for p in pos_list)
 
-        patch_dict = ActivationDict(self.config, position)
-        patch_dict.fused_heads = False
+        self_check = check_pos(original_acts.positions, position)
+        new_check = check_pos(new_acts.positions, position)
 
-        for layer, head in layer_head:
-            patch_dict[(layer, "z")] = self[(layer, "z")].clone()
-            patch_dict[(layer, "z")][:, position, head, :] = new_acts[(layer, "z")][
-                :, position, head, :
-            ].clone()
-        patch_dict.merge_heads()
-        return patch_dict
+        if not self_check or not new_check:
+            raise ValueError("For cross-position patching, implement custom logic.")
+    elif position is None:
+        if original_acts.positions != new_acts.positions:
+            warnings.warn(
+                "Patching all positions but ActivationDicts have different position sets."
+            )
+        position = slice(None)
+
+    patch_dict = ActivationDict(original_acts.config, position)
+    patch_dict.fused_heads = False
+
+    for layer, head in layer_head:
+        patch_dict[(layer, "z")] = original_acts[(layer, "z")].clone()
+        patch_dict[(layer, "z")][:, position, head, :] = new_acts[(layer, "z")][
+            :, position, head, :
+        ].clone()
+    patch_dict.merge_heads()
+    return patch_dict
 
 
 def _locate_layer_component(model, trace, layer: int, component: str):
@@ -247,12 +271,7 @@ def _extract_or_patch(
 
     if attn_implementation != "eager":
         warnings.warn(
-            f"attn_implementation {attn_implementation} can give incorrect results"
-        )
-
-    if patch_value is not None and capture_grad:
-        warnings.warn(
-            "Capturing gradients post patching is ot tested and might give incorrect results."
+            f"attn_implementation '{attn_implementation}' can give incorrect results for z patches or gradients."
         )
 
     comp = _locate_layer_component(model, trace, layer, component)
@@ -269,49 +288,51 @@ def _extract_or_patch(
     return act, grad
 
 
-def _regularize_position(position):
-    if isinstance(position, int):
-        position = [position]
-    elif position is None:
-        position = slice(None)
-    elif isinstance(position, (slice, Sequence)):
-        pass
-    else:
-        raise ValueError("postion must be int, slice, None or Seqeuence")
-    return position
-
-
 def get_activations_and_grads(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
     layers_components: Sequence[tuple[int, str]],
     metric_fn: Optional[Callable[[torch.Tensor], torch.Tensor]],
     position: slice | int | Sequence | None = -1,
+    stop_at_layer: Optional[int] = None,
 ) -> tuple[ActivationDict, Optional[ActivationDict], torch.Tensor]:
     """Get activations and gradients of specific components at given layers."""
+    
+    capture_grad = metric_fn is not None
+
+    if capture_grad and stop_at_layer is not None:
+        warnings.warn(
+            "stop_at_layer is not compatible with gradient computation. Skipping gradient computation."
+        )
+        capture_grad = False
 
     input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
-    position = _regularize_position(position)
+    position = regularize_position(position)
 
     acts_output = ActivationDict(model.model.config, position)
     grads_output = (
-        ActivationDict(model.model.config, position) if metric_fn is not None else None
+        ActivationDict(model.model.config, position) if capture_grad else None
     )
 
-    context = torch.enable_grad if metric_fn is not None else torch.no_grad
+    context = torch.enable_grad if capture_grad else torch.no_grad
+
+    logits = None
 
     with context():
-        with model.trace(input_ids, attention_mask, position_ids) as trace:
+        with model.trace(input_ids, attention_mask, position_ids) as tracer:
             for layer, component in layers_components:
+                if stop_at_layer is not None:
+                    if layer >= stop_at_layer:
+                        tracer.stop()
                 act, grad = _extract_or_patch(
-                    model, trace, layer, component, position, capture_grad=True
+                    model, tracer, layer, component, position, capture_grad=capture_grad
                 )
-                acts_output[(layer, component)] = act.cpu()
+                acts_output[(layer, component)] = act
                 if grad is not None:
-                    grads_output[(layer, component)] = grad.cpu()
+                    grads_output[(layer, component)] = grad
             logits = model.lm_head.output[:, -1, :].save()
 
-            if metric_fn is not None:
+            if capture_grad:
                 metric = metric_fn(logits)
                 metric.backward()
 
@@ -326,26 +347,62 @@ def patch_activations(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
     patching_dict: ActivationDict,
+    layers_components: Optional[Sequence[tuple[int, str]]] = None,
+    metric_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
     position: slice | Sequence[int] | int | None = -1,
 ) -> torch.Tensor:
     if not patching_dict.fused_heads:
         raise ValueError("head activations must be fused before patching")
+    
+    capture_grad = metric_fn is not None
 
     input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
 
-    position = _regularize_position(position)
+    position = regularize_position(position)
 
-    with torch.no_grad():
+    acts_output = ActivationDict(model.model.config, position)
+    grads_output = (
+        ActivationDict(model.model.config, position) if capture_grad else None
+    )
+
+    logits = None
+    grads = None
+
+    patching_dict.unfreeze()
+    patching_dict.update(
+        [(x, None) for x in layers_components]
+    )  # Need to find a better way to do this
+    patching_dict.reorganize()
+
+    context = torch.enable_grad if capture_grad else torch.no_grad
+    
+    with context():
         with model.trace(input_ids, attention_mask, position_ids) as trace:  # noqa: F841
             for (layer, component), patch in patching_dict.items():
-                _, _ = _extract_or_patch(
+                if (layer, component) not in layers_components:
+                    _capture_grad = False
+                else:
+                    _capture_grad = capture_grad
+
+                acts, grads = _extract_or_patch(
                     model,
                     trace,
                     layer,
                     component,
                     position,
-                    capture_grad=False,
+                    capture_grad=_capture_grad,
                     patch_value=patch,
                 )
+
+                if (layer, component) in layers_components:
+                    acts_output[(layer, component)] = acts
+                    if grads is not None:
+                        grads_output[(layer, component)] = grads
+
             logits = model.lm_head.output[:, -1, :].save()
-    return logits
+
+            if capture_grad:
+                metric = metric_fn(logits)
+                metric.backward()
+
+    return acts_output, grads_output, logits

@@ -1,4 +1,9 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, PretrainedConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    AutoConfig,
+    PretrainedConfig,
+)
 from typing import Tuple, Optional, Union
 from nnsight import NNsight, Envoy
 from .tokenizer import ChatTemplateTokenizer
@@ -9,7 +14,8 @@ import json
 from pathlib import Path
 import random
 import numpy as np
-from collections.abc import MutableMapping
+from collections.abc import MutableMapping, Sequence
+
 
 def set_global_seed(seed: int = 0) -> None:
     """
@@ -23,15 +29,16 @@ def set_global_seed(seed: int = 0) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    
+
     torch.backends.cudnn.deterministic = True
 
+
 def load_model_tokenizer_config(
-    model_name: str, 
+    model_name: str,
     device: Optional[str] = None,
     padding_side: str = "left",
     attn_type: str = "sdpa",
-    suffix: str = ""
+    suffix: str = "",
 ) -> Tuple[Envoy, ChatTemplateTokenizer, PretrainedConfig]:
     """
     Load a Hugging Face model, tokenizer, and config by name.
@@ -50,20 +57,25 @@ def load_model_tokenizer_config(
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     config = AutoConfig.from_pretrained(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, padding_side=padding_side, suffix=suffix)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name, use_fast=True, padding_side=padding_side, suffix=suffix
+    )
     tokenizer = ChatTemplateTokenizer(tokenizer)
     config._attn_implementation = attn_type
     if attn_type == "eager":
         config.return_dict_in_generate = True
         config.output_attentions = True
-    
+
     model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
     _ = model.eval().to(device)
     model = NNsight(model)
-    
+
     return model, tokenizer, config
 
-def get_prompts_from_url(url: str, save_path: Union[str, Path] = "data/prompts.json") -> None:
+
+def get_prompts_from_url(
+    url: str, save_path: Union[str, Path] = "data/prompts.json"
+) -> None:
     """
     Downloads prompts from a URL and saves them to a local file.
 
@@ -75,12 +87,15 @@ def get_prompts_from_url(url: str, save_path: Union[str, Path] = "data/prompts.j
     data = response.json()
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    assert "metadata" in data and ("questions" in data or "pairs" in data), "Incorrect schema in fetched data."
-    
+
+    assert "metadata" in data and ("questions" in data or "pairs" in data), (
+        "Incorrect schema in fetched data."
+    )
+
     with save_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
-        
+
+
 def build_dataloader(
     dataset: Union[torch.Tensor, list],
     batch_size: Optional[int],
@@ -102,6 +117,7 @@ def build_dataloader(
         pin_memory=True,
     )
 
+
 def get_position_ids(attention_mask: torch.Tensor) -> torch.Tensor:
     """
     Generates position IDs from an attention mask.
@@ -116,9 +132,9 @@ def get_position_ids(attention_mask: torch.Tensor) -> torch.Tensor:
     position_ids.masked_fill_(attention_mask == 0, 1)
     return position_ids
 
+
 def input_dict_to_tuple(
-    input_dict: dict[str, torch.Tensor],
-    device: Optional[str] = None
+    input_dict: dict[str, torch.Tensor], device: Optional[str] = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Converts an input dictionary of tensors to a tuple of tensors on a specified device.
@@ -140,8 +156,13 @@ def input_dict_to_tuple(
         return input_ids, attention_mask, position_ids
     else:
         raise TypeError("Input must be a dictionary-like object.")
-    
-def get_logit_difference(logits: torch.Tensor, tokenizer: ChatTemplateTokenizer, tokens: list[str]=["A", "B"]) -> torch.Tensor:
+
+
+def get_logit_difference(
+    logits: torch.Tensor,
+    tokenizer: ChatTemplateTokenizer,
+    tokens: list[str] = ["A", "B"],
+) -> torch.Tensor:
     """
     Calculates the difference in logits between two tokens.
 
@@ -155,4 +176,16 @@ def get_logit_difference(logits: torch.Tensor, tokenizer: ChatTemplateTokenizer,
     """
     tokA_id = tokenizer.tokenizer.encode(tokens[0], add_special_tokens=False)[0]
     tokB_id = tokenizer.tokenizer.encode(tokens[1], add_special_tokens=False)[0]
-    return (logits[:, tokA_id] - logits[:, tokB_id])
+    return logits[:, tokA_id] - logits[:, tokB_id]
+
+
+def regularize_position(position):
+    if isinstance(position, int):
+        position = [position]
+    elif position is None:
+        position = slice(None)
+    elif isinstance(position, (slice, Sequence)):
+        pass
+    else:
+        raise ValueError("postion must be int, slice, None or Seqeuence")
+    return position

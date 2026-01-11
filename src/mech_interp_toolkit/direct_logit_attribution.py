@@ -1,8 +1,9 @@
 import torch
 from nnsight import NNsight
-from .utils import ChatTemplateTokenizer, input_dict_to_tuple
+from .utils import ChatTemplateTokenizer
 import einops
 from collections.abc import Sequence
+from .activations import get_activations
 
 
 def get_pre_rms_logit_diff_direction(
@@ -37,14 +38,14 @@ def get_pre_rms_logit_diff_direction(
     return pre_rms_logit_diff_direction
 
 
-def run_layerwise_dla(
+def run_componentwise_dla(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
     pre_rms_direction: torch.Tensor,
     eps: float = 1e-6,
 ) -> dict[str, dict[int, torch.Tensor]]:
     """
-    Performs layer-wise Direct Logit Attribution (DLA).
+    Performs component-wise Direct Logit Attribution (DLA).
 
     Args:
         model: The NNsight model wrapper.
@@ -55,35 +56,33 @@ def run_layerwise_dla(
     Returns:
         A dictionary containing the DLA results for attention and MLP layers.
     """
-    attn_records = dict()
-    mlp_records = dict()
+
     n_layers = model.model.config.num_hidden_layers
-    input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
+    device = pre_rms_direction.device
 
-    with torch.no_grad():
-        with model.trace(input_ids, attention_mask, position_ids) as trace:  # noqa: F841
-            for layer in range(n_layers):
-                attn_records[layer] = (
-                    model.model.layers[layer].self_attn.output[0][:, -1, :].save()
-                )
-                mlp_records[layer] = (
-                    model.model.layers[layer].mlp.output[:, -1, :].save()
-                )
-            rms_final = (
-                model.model.layers[-1]
-                .output[:, -1, :]
-                .norm(dim=-1, keepdim=True)
-                .save()
-            )
+    # Prepare components to fetch
+    layers_components = [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
 
-    # The divisor for DLA is the L2 norm of the final residual stream.
+    layers_components.append((n_layers - 1, "layer_out"))
+
+    # Get activations
+    activations, _, _ = get_activations(model, inputs, layers_components, position=-1)
+
+    # Calculate divisor
+    final_layer_output = activations[(n_layers - 1, "layer_out")].squeeze(1).to(device)
+    rms_final = final_layer_output.norm(dim=-1, keepdim=True)
     divisor = torch.sqrt(rms_final**2 + eps).squeeze()
 
-    attn_dla = {k: (v @ pre_rms_direction) / divisor for k, v in attn_records.items()}
-
-    mlp_dla = {k: (v @ pre_rms_direction) / divisor for k, v in mlp_records.items()}
-
-    return {"attn": attn_dla, "mlp": mlp_dla}
+    # Calculate DLA
+    dla_scores = {}
+    for layer_component, activation in activations.items():
+        _, component = layer_component
+        if component == "layer_out":
+            continue
+        dla_scores[layer_component] = (
+            activation.squeeze(1).to(device) @ pre_rms_direction
+        ) / divisor
+    return dla_scores
 
 
 def run_headwise_dla_for_layer(
@@ -92,38 +91,33 @@ def run_headwise_dla_for_layer(
     pre_rms_direction: torch.Tensor,
     layer: int,
     eps: float = 1e-6,
-    scale: bool = True,
 ) -> torch.Tensor:
     """
     Performs head-wise Direct Logit Attribution (DLA) for a specific layer.
-
     Args:
         model: The NNsight model wrapper.
         inputs: The input tensors for the model.
         pre_rms_direction: The direction vector in the residual stream.
         layer: The layer index.
         eps: A small value to prevent division by zero.
-        scale: Whether to scale the DLA results by the final LayerNorm.
-
     Returns:
         A tensor containing the DLA results for each head.
     """
-    input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
-
     proj_weight = model.model.layers[layer].self_attn.o_proj.weight
     num_heads = model.model.config.num_attention_heads
+    n_layers = model.model.config.num_hidden_layers
+    device = proj_weight.device  # Get device from model parameter
 
-    with torch.no_grad():
-        with model.trace(input_ids, attention_mask, position_ids) as trace:  # noqa: F841
-            head_inputs = (
-                model.model.layers[layer].self_attn.o_proj.input[:, -1, :].save()
-            )
-            rms_final = (
-                model.model.layers[-1]
-                .output[:, -1, :]
-                .norm(dim=-1, keepdim=True)
-                .save()
-            )
+    # Define components to fetch
+    layers_components = [(layer, "z"), (n_layers - 1, "layer_out")]
+
+    # Get activations
+    activations, _, _ = get_activations(model, inputs, layers_components, position=-1)
+
+    head_inputs = activations[(layer, "z")].squeeze(1).to(device)
+    final_layer_output = activations[(n_layers - 1, "layer_out")].squeeze(1).to(device)
+
+    rms_final = final_layer_output.norm(dim=-1, keepdim=True)
 
     divisor = torch.sqrt(rms_final**2 + eps)
 
@@ -140,4 +134,4 @@ def run_headwise_dla_for_layer(
         "batch n_heads head_dim, d_model n_heads head_dim, d_model -> batch n_heads",
     )
 
-    return projections / divisor if scale else projections
+    return projections / divisor
