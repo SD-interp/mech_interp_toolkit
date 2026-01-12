@@ -22,9 +22,6 @@ class LinearProbe:
             raise ValueError("test_split must be between 0.0 and 1.0")
         self.test_split = test_split
 
-        self.linear_model = None
-
-        # 3. FIX: Separate kwargs or handle explicitly to avoid passing invalid args
         if target_type == "classification":
             self.linear_model = LogisticRegression(**kwargs)
         elif target_type == "regression":
@@ -33,7 +30,7 @@ class LinearProbe:
             raise ValueError("target_type must be 'classification' or 'regression'")
 
         self.weight: Optional[np.ndarray] = None
-        self.bias: Optional[np.ndarray] = None
+        self.bias: Optional[np.ndarray | float] = None
 
     def _process_batch(
         self, inputs: np.ndarray, target: Optional[np.ndarray]
@@ -69,7 +66,7 @@ class LinearProbe:
 
     def prepare_data(
         self, activations: ActivationDict, target: torch.Tensor | np.ndarray
-    ):
+    ) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
         if len(activations) != 1:
             raise ValueError("Only single components are supported")
 
@@ -107,6 +104,9 @@ class LinearProbe:
     def fit(self, activations: ActivationDict, target: torch.Tensor | np.ndarray):
         X_train, X_test, y_train, y_test = self.prepare_data(activations, target)
 
+        if y_test is None or y_train is None:
+            raise ValueError("Target cannot be None for fitting the linear probe.")
+        
         print(f"Train set size: {len(X_train)}, Test set size: {len(X_test)}")
 
         self.linear_model.fit(X_train, y_train)

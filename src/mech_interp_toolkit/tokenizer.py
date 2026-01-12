@@ -39,28 +39,24 @@ class ChatTemplateTokenizer:
         if isinstance(base_prompts, str):
             base_prompts = [base_prompts]
         
-        intruct_syntax_prompts = [
-        [{
-            "role": "system",
-            "content": self.system_prompt
-        },
-         {
-            "role": "user",
-            "content": user_prompt
-         }]
-        for user_prompt in base_prompts
+        instruct_syntax_prompts = [
+            [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            for user_prompt in base_prompts
         ]
         
-        formated_prompts = [
+        formatted_prompts = [
             self.tokenizer.apply_chat_template(
             prompt, tokenize=False, add_special_tokens=True, 
             add_generation_prompt=True, enable_thinking=thinking
             ) + self.suffix #type: ignore
-            for prompt in intruct_syntax_prompts
+            for prompt in instruct_syntax_prompts
             ]
-        formated_prompts = cast(list[str], formated_prompts)
-        self.structured_prompt = formated_prompts
-        return formated_prompts
+        formatted_prompts = cast(list[str], formatted_prompts)
+        self.structured_prompt = formatted_prompts
+        return formatted_prompts
         
     def _encode(self, formatted_prompts: list[str]) -> dict[str, torch.Tensor]:
         """

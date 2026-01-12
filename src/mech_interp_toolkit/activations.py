@@ -3,7 +3,7 @@ from nnsight import NNsight
 from .utils import input_dict_to_tuple, regularize_position
 from collections.abc import Sequence, Callable
 import warnings
-from typing import Optional
+from typing import Optional, Any, cast
 from .activation_dict import ActivationDict
 
 
@@ -76,16 +76,17 @@ def _locate_layer_component(model, trace, layer: int, component: str):
     if trace is None:
         raise ValueError("Active trace is required to locate layer components.")
 
+    layers = cast(Any, model.model.layers)
     if component == "attn":
-        comp = model.model.layers[layer].self_attn.output[0]
+        comp = layers[layer].self_attn.output[0]
     elif component == "mlp":
-        comp = model.model.layers[layer].mlp.output
+        comp = layers[layer].mlp.output
     elif component == "z":
-        comp = model.model.layers[layer].self_attn.o_proj.input
+        comp = layers[layer].self_attn.o_proj.input
     elif component == "layer_in":
-        comp = model.model.layers[layer].input
+        comp = layers[layer].input
     elif component == "layer_out":
-        comp = model.model.layers[layer].output
+        comp = layers[layer].output
     else:
         raise ValueError(
             "component must be one of {'attn', 'mlp', 'z', 'layer_in', 'layer_out'}"
@@ -209,9 +210,7 @@ def patch_activations(
     grads = None
 
     patching_dict.unfreeze()
-    patching_dict.update(
-        [(x, None) for x in layers_components]
-    )  # Need to find a better way to do this
+    patching_dict.update([(x, None) for x in layers_components])
     patching_dict.reorganize()
 
     context = torch.enable_grad if capture_grad else torch.no_grad

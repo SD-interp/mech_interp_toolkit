@@ -67,7 +67,7 @@ def load_model_tokenizer_config(
         config.output_attentions = True
 
     model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
-    _ = model.eval().to(device)
+    model.eval().to(device)
     model = NNsight(model)
 
     return model, tokenizer, config
@@ -187,5 +187,5 @@ def regularize_position(position):
     elif isinstance(position, (slice, Sequence)):
         pass
     else:
-        raise ValueError("postion must be int, slice, None or Seqeuence")
+        raise ValueError("position must be int, slice, None or Sequence")
     return position

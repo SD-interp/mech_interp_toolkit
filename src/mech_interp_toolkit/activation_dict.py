@@ -18,20 +18,20 @@ class ArithmeticOperation(ABC, dict[tuple[int, str], torch.Tensor]):
         self.positions = positions
 
     def check_compatibility(self, other):
-            if not isinstance(other, ActivationDict):
-                raise ValueError("Operand must be an instance of ActivationDict.")
-            if self.config != other.config:
-                raise ValueError(
-                    "ActivationDicts must have the same config for arithmetic operations."
-                )
-            if self.positions != other.positions:
-                raise ValueError(
-                    "ActivationDicts must have the same positions for arithmetic operations."
-                )
-            if self.keys() != other.keys():
-                raise ValueError(
-                    "ActivationDicts must have the same keys for arithmetic operations."
-                )
+        if not isinstance(other, ActivationDict):
+            raise ValueError("Operand must be an instance of ActivationDict.")
+        if self.config != other.config:
+            raise ValueError(
+                "ActivationDicts must have the same config for arithmetic operations."
+            )
+        if self.positions != other.positions:
+            raise ValueError(
+                "ActivationDicts must have the same positions for arithmetic operations."
+            )
+        if self.keys() != other.keys():
+            raise ValueError(
+                "ActivationDicts must have the same keys for arithmetic operations."
+            )
 
     def __add__(self, other) -> Self:
         self.check_compatibility(other)
