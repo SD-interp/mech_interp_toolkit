@@ -2,8 +2,8 @@ import torch
 from nnsight import NNsight
 from collections.abc import Sequence, Callable
 from .activations import get_activations_and_grads, get_activations, patch_activations
-from typing import Literal
-from .activations import ActivationsDict
+from typing import Literal, Optional, cast
+from .activation_dict import ActivationDict
 from .utils import regularize_position
 
 
@@ -14,11 +14,12 @@ def _get_acts_and_grads(
     compute_grad_at: Literal["clean", "corrupted"] = "clean",
     metric_fn: Callable = torch.mean,
     position: slice | int | Sequence | None = -1,
-) -> tuple[ActivationsDict, ActivationsDict, ActivationsDict]:
+) -> tuple[ActivationDict, ActivationDict, Optional[ActivationDict]]:
     """
     Helper function to get activations and gradients for clean and corrupted inputs.
     """
-    n_layers = model.model.config.num_hidden_layers
+    n_layers = model.model.config.num_hidden_layers  # type: ignore
+    n_layers = cast(int, n_layers)
 
     layer_components = [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
 
@@ -31,7 +32,8 @@ def _get_acts_and_grads(
             position=position,
         )
         clean_acts.cpu()
-        grads.cpu()
+        if grads is not None:
+            grads.cpu()
 
         corrupted_acts, _, _ = get_activations(
             model,
@@ -50,7 +52,8 @@ def _get_acts_and_grads(
             position=position,
         )
         corrupted_acts.cpu()
-        grads.cpu()
+        if grads is not None:
+            grads.cpu()
 
         clean_acts, _, _ = get_activations(
             model,
@@ -66,23 +69,19 @@ def _get_acts_and_grads(
 
 
 def _interpolate_activations(
-    clean_activations: torch.Tensor | ActivationsDict,
-    baseline_activations: torch.Tensor | ActivationsDict,
-    alpha: float,
+    clean_activations: ActivationDict,
+    baseline_activations: ActivationDict,
+    alpha: float | torch.Tensor,
     key: tuple[int, str] = (0, "layer_in"),
-) -> ActivationsDict:
+) -> ActivationDict:
     """
     Interpolates between clean and corrupted inputs.
     """
-    if isinstance(clean_activations, ActivationsDict):
-        clean_activations = clean_activations[key]
-    
-    if isinstance(baseline_activations, ActivationsDict):
-        baseline_activations = baseline_activations[key]
-    
-    interpolated_activations = ActivationsDict()
-    interpolated_activations[key] = (1 - alpha) * clean_activations + alpha * baseline_activations
+    interpolated_activations = (
+        1 - alpha
+    ) * clean_activations + alpha * baseline_activations
     return interpolated_activations
+
 
 def edge_attribution_patching(
     model: NNsight,
@@ -91,7 +90,7 @@ def edge_attribution_patching(
     compute_grad_at: Literal["clean", "corrupted"] = "clean",
     metric_fn: Callable = torch.mean,
     position: slice | int | Sequence | None = -1,
-) -> dict[str, dict[int, torch.Tensor]]:
+) -> ActivationDict:
     """
     Computes edge attributions for attention heads using simple gradient x activation.
     """
@@ -105,66 +104,88 @@ def edge_attribution_patching(
         position=position,
     )
 
-    eap_scores = {}
-
-    for layer_component in clean_acts.keys():
-        clean_act = clean_acts[layer_component]
-        corrupted_act = corrupted_acts[layer_component]
-        grad = grads[layer_component]
-
-        eap_scores[layer_component] = ((clean_act - corrupted_act) * grad).sum(dim=-1)
-
+    eap_scores = ((clean_acts - corrupted_acts) * grads).apply(torch.sum, dim=-1)
     return eap_scores
 
 
-def vanilla_integrated_gradients(
+def eap_integrated_gradients(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
-    baseline_inputs: dict[str, torch.Tensor],
-    compute_grad_at: Literal["clean", "corrupted"] = "clean",
+    baseline_embeddings: ActivationDict,
     metric_fn: Callable = torch.mean,
     position: slice | int | Sequence | None = -1,
     steps: int = 50,
-) -> dict[str, dict[int, torch.Tensor]]:
+    layer_components: Optional[Sequence[tuple[int, str]]] = None,
+) -> ActivationDict:
     """
     Computes vanilla integrated w.r.t. input embeddings.
+    Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
+    https://arxiv.org/abs/1703.01365
     """
+    
+    n_layers = model.model.config.num_hidden_layers  # type: ignore
+    n_layers = cast(int, n_layers)
+
+    if layer_components is None:
+        layer_components = [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
 
     position = regularize_position(position)
     embedding_key = (0, "layer_in")
 
-    input_embeddings = get_activations(
+    input_embeddings, _, _ = get_activations(
         model,
         inputs,
-        layers_components=embedding_key,
-        position=position,
-        stop_at_layer=1,
-    )
-    baseline_embeddings = get_activations(
-        model,
-        baseline_inputs,
-        layers_components=embedding_key,
+        layers_components=[embedding_key],
         position=position,
         stop_at_layer=1,
     )
 
-    alphas = torch.linspace(0, 1, steps).to(input_embeddings.device)
-
-    accumulated_grads = torch.zeros_like(input_embeddings)
+    device = input_embeddings[embedding_key].device
+    alphas = torch.linspace(0, 1, steps).to(device)
+    accumulated_grads = torch.zeros_like(input_embeddings[embedding_key])
 
     for alpha in alphas:
         interpolated_embeddings = _interpolate_activations(
             input_embeddings, baseline_embeddings, alpha
         )
 
-        _, _, grads = patch_activations(
+        _, grads, _ = patch_activations(
             model,
             inputs,
             interpolated_embeddings,
-            layers_components=embedding_key,
+            layers_components=layer_components,
             metric_fn=metric_fn,
             position=position,
         )
-        accumulated_grads += grads[embedding_key] / steps
-    integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1)
-    return integrated_grads.cpu()
+        accumulated_grads = accumulated_grads + (grads / steps)
+
+    integrated_grads = (
+        (input_embeddings - baseline_embeddings) * accumulated_grads
+    ).apply(torch.sum, dim=-1)
+    return integrated_grads
+
+def true_integrated_gradients(
+    model: NNsight,
+    inputs: dict[str, torch.Tensor],
+    baseline_embeddings: ActivationDict,
+    metric_fn: Callable = torch.mean,
+    steps: int = 50,
+) -> ActivationDict:
+    """
+    Computes vanilla integrated w.r.t. input embeddings.
+    Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
+    https://arxiv.org/abs/1703.01365
+    """
+    
+    integrated_gradients = eap_integrated_gradients(
+        model,
+        inputs,
+        baseline_embeddings,
+        metric_fn=metric_fn,
+        position=None,
+        layer_components=[(0, "layer_in")],
+        steps=steps,
+    )
+    return integrated_gradients
+    
+

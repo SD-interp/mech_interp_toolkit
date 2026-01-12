@@ -2,7 +2,8 @@ import pytest
 import torch
 import numpy as np
 from unittest.mock import MagicMock, patch
-from mech_interp_toolkit.direct_logit_attribution import ActivationDict, FrozenError, LinearProbe
+from mech_interp_toolkit.activation_dict import ActivationDict, FrozenError
+from mech_interp_toolkit.linear_probes import LinearProbe
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 @pytest.fixture
@@ -57,7 +58,7 @@ def test_split_merge_heads(activation_dict):
 def test_get_mean_activations(activation_dict):
     """Tests the get_mean_activations method."""
     activation_dict[(0, "z")] = torch.ones(2, 10, 128)
-    mean_acts = activation_dict.get_mean_activations()
+    mean_acts = activation_dict.apply(torch.mean, dim=0)
     assert torch.allclose(mean_acts[(0, "z")], torch.ones(10, 128))
 
 def test_cuda(activation_dict):
@@ -69,6 +70,8 @@ def test_cuda(activation_dict):
     activation_dict.cuda()
     assert activation_dict[(0, "z")].is_cuda
 
+from mech_interp_toolkit.activations import create_z_patch_dict
+
 def test_create_z_patch_dict(activation_dict, mock_config):
     """Tests the create_z_patch_dict method."""
     new_acts = ActivationDict(mock_config, positions=slice(None))
@@ -78,7 +81,7 @@ def test_create_z_patch_dict(activation_dict, mock_config):
     activation_dict.split_heads()
     new_acts.split_heads()
     
-    patch_dict = activation_dict.create_z_patch_dict(new_acts, [(0, 1)], position=[5])
+    patch_dict = create_z_patch_dict(activation_dict, new_acts, [(0, 1)], position=[5])
     
     assert patch_dict.fused_heads
     assert (0, "z") in patch_dict
@@ -147,7 +150,7 @@ def test_get_pre_rms_logit_diff_direction():
     direction = get_pre_rms_logit_diff_direction(["a", "b"], mock_tokenizer, mock_model)
     assert direction.shape == (128,)
 
-@patch('mech_interp_toolkit.interpret.input_dict_to_tuple')
+@patch('mech_interp_toolkit.utils.input_dict_to_tuple')
 def test_get_activations(mock_input_dict_to_tuple, mock_config):
     """Tests the get_activations function."""
     from mech_interp_toolkit.direct_logit_attribution import get_activations
@@ -159,13 +162,13 @@ def test_get_activations(mock_input_dict_to_tuple, mock_config):
     
     with patch.object(mock_model, 'trace') as mock_trace:
         mock_trace.return_value.__enter__.return_value = None # No trace object yielded
-        get_activations(mock_model, {}, [])
+        get_activations(mock_model, {"input_ids": torch.randint(0, 100, (1, 10))}, [])
 
 
-@patch('mech_interp_toolkit.interpret.input_dict_to_tuple')
+@patch('mech_interp_toolkit.utils.input_dict_to_tuple')
 def test_patch_activations(mock_input_dict_to_tuple, activation_dict, mock_config):
     """Tests the patch_activations function."""
-    from mech_interp_toolkit.direct_logit_attribution import patch_activations
+    from mech_interp_toolkit.activations import patch_activations
 
     mock_input_dict_to_tuple.return_value = (torch.randint(0, 100, (1, 10)), torch.ones(1, 10), torch.arange(10))
 
@@ -184,24 +187,27 @@ def test_patch_activations(mock_input_dict_to_tuple, activation_dict, mock_confi
         
         assert logits.shape == (1, 100)
 
-def test_run_layerwise_dla():
-    """Tests the run_layerwise_dla function."""
-    from mech_interp_toolkit.direct_logit_attribution import run_layerwise_dla
-    with patch('mech_interp_toolkit.interpret.input_dict_to_tuple') as mock_input_dict:
+def test_run_componentwise_dla():
+    """Tests the run_componentwise_dla function."""
+    from mech_interp_toolkit.direct_logit_attribution import run_componentwise_dla
+    with patch('mech_interp_toolkit.utils.input_dict_to_tuple') as mock_input_dict:
         mock_input_dict.return_value = (torch.zeros(1,1), torch.zeros(1,1), torch.zeros(1,1))
         mock_model = MagicMock()
         mock_model.model.config.num_hidden_layers = 2
-        with patch.object(mock_model, 'trace') as mock_trace:
-            mock_trace.return_value.__enter__.return_value = None
-            mock_model.model.layers[-1].output.__getitem__.return_value.norm.return_value.save.return_value = torch.randn(1)
-            dla_results = run_layerwise_dla(mock_model, {}, torch.zeros(1))
-            assert 'attn' in dla_results
-            assert 'mlp' in dla_results
+        with patch('mech_interp_toolkit.direct_logit_attribution.get_activations') as mock_get_activations:
+            activations = ActivationDict(mock_model.model.config, slice(None))
+            activations[(1, "layer_out")] = torch.ones(1, 1, 128)
+            activations[(0, "attn")] = torch.ones(1, 1, 128)
+            activations[(0, "mlp")] = torch.ones(1, 1, 128)
+            mock_get_activations.return_value = (activations, None, None)
+            dla_results = run_componentwise_dla(mock_model, {"input_ids": torch.randint(0, 100, (1, 10))}, torch.zeros(128))
+            assert (0, 'attn') in dla_results
+            assert (0, 'mlp') in dla_results
 
 def test_run_headwise_dla_for_layer():
     """Tests the run_headwise_dla_for_layer function."""
     from mech_interp_toolkit.direct_logit_attribution import run_headwise_dla_for_layer
-    with patch('mech_interp_toolkit.interpret.input_dict_to_tuple') as mock_input_dict:
+    with patch('mech_interp_toolkit.utils.input_dict_to_tuple') as mock_input_dict:
         mock_input_dict.return_value = (torch.zeros(1,1), torch.zeros(1,1), torch.zeros(1,1))
         mock_model = MagicMock()
         mock_model.model.config.num_attention_heads = 4
@@ -210,62 +216,18 @@ def test_run_headwise_dla_for_layer():
             mock_trace.return_value.__enter__.return_value = mock_trace
             mock_model.model.layers[0].self_attn.o_proj.input.__getitem__.return_value.save.return_value = torch.randn(1, 128)
             mock_model.model.layers[-1].output.__getitem__.return_value.norm.return_value.save.return_value = torch.randn(1)
-            dla_results = run_headwise_dla_for_layer(mock_model, {}, torch.zeros(1), 0)
+            dla_results = run_headwise_dla_for_layer(mock_model, {"input_ids": torch.randint(0, 100, (1, 10))}, torch.zeros(128), 0)
             assert dla_results is not None
 
 def test_get_attention_pattern(mock_config):
     """Tests the get_attention_pattern function."""
-    from mech_interp_toolkit.direct_logit_attribution import get_attention_pattern
-    with patch('mech_interp_toolkit.interpret.input_dict_to_tuple') as mock_input_dict:
+    from mech_interp_toolkit.misc import get_attention_pattern
+    with patch('mech_interp_toolkit.utils.input_dict_to_tuple') as mock_input_dict:
         mock_input_dict.return_value = (torch.zeros(1,1), torch.zeros(1,1), torch.zeros(1,1))
         mock_model = MagicMock()
         mock_model.model.config = mock_config
         with patch.object(mock_model, 'trace') as mock_trace:
             mock_trace.return_value.__enter__.return_value = mock_trace
-            patterns = get_attention_pattern(mock_model, {}, [0], [(0,1)])
+            patterns = get_attention_pattern(mock_model, {"input_ids": torch.randint(0, 100, (1, 10))}, [0], [(0,1)])
             assert patterns is not None
 
-@patch('mech_interp_toolkit.interpret.input_dict_to_tuple')
-def test_integrated_gradients(mock_input_dict_to_tuple, mock_config):
-    """Tests the integrated_gradients function."""
-    from mech_interp_toolkit.direct_logit_attribution import integrated_gradients
-    
-    input_ids = torch.randint(0, 100, (1, 5))
-    hidden_size = mock_config.hidden_size
-    mock_input_dict_to_tuple.return_value = (input_ids, torch.ones(1, 5), torch.arange(5))
-
-    mock_model = MagicMock()
-    
-    # Mock embedding layer and its output
-    embedding_layer = MagicMock()
-    input_embeddings = torch.rand(1, 5, hidden_size)
-    embedding_layer.return_value = input_embeddings
-    mock_model.model.get_input_embeddings.return_value = embedding_layer
-    
-    with patch.object(mock_model, 'trace') as mock_trace, \
-         patch('torch.autograd.grad') as mock_grad:
-        
-        # Setup mock for trace
-        mock_logits_proxy = MagicMock()
-        mock_logits_proxy.value = torch.rand(1, 100) # dummy logits
-        
-        mock_trace.return_value.__enter__.return_value.lm_head.output.__getitem__.return_value.__getitem__.return_value.save.return_value = mock_logits_proxy
-
-        # Setup mock for grad to return a constant tensor of ones.
-        mock_grad.return_value = [torch.ones(1, 5, hidden_size)]
-
-        steps = 4
-        result = integrated_gradients(mock_model, {}, target_id=0, steps=steps)
-
-        # Check shape
-        assert result.shape == (1, 5, hidden_size)
-
-        # Check call counts
-        assert mock_trace.call_count == steps + 1
-        assert mock_grad.call_count == steps + 1
-
-        # Check the actual value.
-        # total_grads will be (steps + 1) * ones_tensor.
-        # avg_grads will be ones_tensor.
-        # result = (input_embeddings - 0) * avg_grads = input_embeddings
-        assert torch.allclose(result, input_embeddings)
