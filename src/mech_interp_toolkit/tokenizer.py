@@ -16,7 +16,7 @@ class ChatTemplateTokenizer:
         system_prompt (str, optional): The system prompt to use. Defaults to "You are a strategic planning assistant that follows user instructions carefully".
     """
     def __init__(self, tokenizer: PreTrainedTokenizer, suffix: str = "",
-                 system_prompt: str = "You are a strtegic planning assitant that follows user instructions carefully"):
+                 system_prompt: str = "You are a strategic planning assistant that follows user instructions carefully"):
         self.tokenizer = tokenizer
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
