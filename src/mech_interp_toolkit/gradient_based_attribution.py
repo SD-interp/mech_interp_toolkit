@@ -108,28 +108,23 @@ def edge_attribution_patching(
     return eap_scores
 
 
-def eap_integrated_gradients(
+def simple_integrated_gradients(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
     baseline_embeddings: ActivationDict,
     metric_fn: Callable = torch.mean,
-    position: slice | int | Sequence | None = -1,
     steps: int = 50,
-    layer_components: Optional[Sequence[tuple[int, str]]] = None,
 ) -> ActivationDict:
     """
     Computes vanilla integrated w.r.t. input embeddings.
     Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
     https://arxiv.org/abs/1703.01365
     """
-    
+
     n_layers = model.model.config.num_hidden_layers  # type: ignore
     n_layers = cast(int, n_layers)
 
-    if layer_components is None:
-        layer_components = [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
-
-    position = regularize_position(position)
+    position = regularize_position(slice(None))
     embedding_key = (0, "layer_in")
 
     input_embeddings, _, _ = get_activations(
@@ -142,7 +137,7 @@ def eap_integrated_gradients(
 
     device = input_embeddings[embedding_key].device
     alphas = torch.linspace(0, 1, steps).to(device)
-    accumulated_grads = torch.zeros_like(input_embeddings[embedding_key])
+    accumulated_grads = None
 
     for alpha in alphas:
         interpolated_embeddings = _interpolate_activations(
@@ -153,39 +148,75 @@ def eap_integrated_gradients(
             model,
             inputs,
             interpolated_embeddings,
-            layers_components=layer_components,
+            layers_components=[embedding_key],
             metric_fn=metric_fn,
             position=position,
         )
-        accumulated_grads = accumulated_grads + (grads / steps)
+        if accumulated_grads is None:
+            accumulated_grads = grads / steps
+        else:
+            accumulated_grads = accumulated_grads + (grads / steps)
 
     integrated_grads = (
         (input_embeddings - baseline_embeddings) * accumulated_grads
     ).apply(torch.sum, dim=-1)
     return integrated_grads
 
-def true_integrated_gradients(
+
+def eap_integrated_gradients(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
     baseline_embeddings: ActivationDict,
+    layer_components: list[tuple[int, str]] | None = None,
     metric_fn: Callable = torch.mean,
-    steps: int = 50,
+    position: slice | int | Sequence | None = -1,
+    steps: int = 5,
 ) -> ActivationDict:
     """
-    Computes vanilla integrated w.r.t. input embeddings.
-    Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
-    https://arxiv.org/abs/1703.01365
+    Computes integrated gradients for edge attributions.
+    Implements the method from "Have Faith in Faithfulness: Going Beyond Circuit Overlap ..."
+    by Hanna et al., 2024. https://arxiv.org/pdf/2403.17806
     """
-    
-    integrated_gradients = eap_integrated_gradients(
+
+    n_layers = model.model.config.num_hidden_layers  # type: ignore
+    n_layers = cast(int, n_layers)
+
+    position = regularize_position(position)
+
+    if layer_components is None:
+        layer_components = [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
+
+    embeddings, _, _ = get_activations(
         model,
         inputs,
-        baseline_embeddings,
-        metric_fn=metric_fn,
-        position=None,
-        layer_components=[(0, "layer_in")],
-        steps=steps,
+        layers_components=layer_components,
+        position=position,
+        stop_at_layer=1,
     )
-    return integrated_gradients
-    
 
+    device = list(embeddings.values())[0].device if embeddings else torch.device("cpu")
+    alphas = torch.linspace(0, 1, steps).to(device)
+    accumulated_grads = None
+
+    for alpha in alphas:
+        interpolated_embeddings = _interpolate_activations(
+            embeddings, baseline_embeddings, alpha
+        )
+
+        _, grads, _ = patch_activations(
+            model,
+            inputs,
+            interpolated_embeddings,
+            layers_components=layer_components,
+            metric_fn=metric_fn,
+            position=position,
+        )
+        if accumulated_grads is None:
+            accumulated_grads = grads / steps
+        else:
+            accumulated_grads = accumulated_grads + (grads / steps)
+
+    integrated_grads = (
+        (embeddings - baseline_embeddings) * accumulated_grads
+    ).apply(torch.sum, dim=-1)
+    return integrated_grads

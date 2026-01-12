@@ -8,8 +8,8 @@ from .activation_dict import ActivationDict
 
 
 def create_z_patch_dict(
-    original_acts,
-    new_acts,
+    original_acts: ActivationDict,
+    new_acts: ActivationDict,
     layer_head: list[tuple[int, int]],
     position: None | int | Sequence[int] | slice = None,
 ):
