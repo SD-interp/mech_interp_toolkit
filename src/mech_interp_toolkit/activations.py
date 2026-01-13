@@ -121,7 +121,8 @@ def _extract_or_patch(
         act = comp[:, position, :].save()
 
     if capture_grad:
-        grad = comp.grad[:, position, :].save()
+        comp.retain_grad()
+        grad = comp.grad.save()
     else:
         grad = None
     return act, grad
@@ -233,14 +234,15 @@ def patch_activations(
                     patch_value=patch,
                 )
 
+                if (layer, component) in layers_components:
+                    acts_output[(layer, component)] = acts
+                    if grads is not None:
+                        grads_output[(layer, component)] = grads
+
             logits = model.lm_head.output[:, -1, :].save()  # type: ignore
+
             if capture_grad:
-                with metric_fn(logits).backward():          # type: ignore
-                    for (layer, component), patch in reversed(patching_dict.items()):
-                        if (layer, component) in layers_components:
-                            acts_output[(layer, component)] = acts
-                            if grads is not None:
-                                grads_output[(layer, component)] = grads
-                    
+                metric = metric_fn(logits)
+                metric.backward()
 
     return acts_output, grads_output, logits
