@@ -235,7 +235,7 @@ def patch_activations(
 
             logits = model.lm_head.output[:, -1, :].save()  # type: ignore
             if capture_grad:
-                with metric_fn(logits).backward():
+                with metric_fn(logits).backward():          # type: ignore
                     for (layer, component), patch in reversed(patching_dict.items()):
                         if (layer, component) in layers_components:
                             acts_output[(layer, component)] = acts

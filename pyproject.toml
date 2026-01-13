@@ -1,6 +1,6 @@
 [project]
 name = "mech-interp-toolkit"
-version = "0.0.2"
+version = "0.0.3"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
