@@ -233,15 +233,14 @@ def patch_activations(
                     patch_value=patch,
                 )
 
-                if (layer, component) in layers_components:
-                    acts_output[(layer, component)] = acts
-                    if grads is not None:
-                        grads_output[(layer, component)] = grads
-
             logits = model.lm_head.output[:, -1, :].save()  # type: ignore
-
             if capture_grad:
-                metric = metric_fn(logits)
-                metric.backward()
+                with metric_fn(logits).backward():
+                    for (layer, component), patch in reversed(patching_dict.items()):
+                        if (layer, component) in layers_components:
+                            acts_output[(layer, component)] = acts
+                            if grads is not None:
+                                grads_output[(layer, component)] = grads
+                    
 
     return acts_output, grads_output, logits

@@ -5,6 +5,7 @@ from .activations import get_activations_and_grads, get_activations, patch_activ
 from typing import Literal, Optional, cast
 from .activation_dict import ActivationDict
 from .utils import regularize_position
+from functools import partial
 
 
 def _get_acts_and_grads(
@@ -12,7 +13,7 @@ def _get_acts_and_grads(
     clean_inputs: dict[str, torch.Tensor],
     corrupted_inputs: dict[str, torch.Tensor],
     compute_grad_at: Literal["clean", "corrupted"] = "clean",
-    metric_fn: Callable = torch.mean,
+    metric_fn: Callable = partial(torch.mean, dim=-1),
     position: slice | int | Sequence | None = -1,
 ) -> tuple[ActivationDict, ActivationDict, Optional[ActivationDict]]:
     """
@@ -88,7 +89,7 @@ def edge_attribution_patching(
     clean_inputs: dict[str, torch.Tensor],
     corrupted_inputs: dict[str, torch.Tensor],
     compute_grad_at: Literal["clean", "corrupted"] = "clean",
-    metric_fn: Callable = torch.mean,
+    metric_fn: Callable = partial(torch.mean, dim=-1),
     position: slice | int | Sequence | None = -1,
 ) -> ActivationDict:
     """
@@ -112,7 +113,7 @@ def simple_integrated_gradients(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
     baseline_embeddings: ActivationDict,
-    metric_fn: Callable = torch.mean,
+    metric_fn: Callable = partial(torch.mean, dim=-1),
     steps: int = 50,
 ) -> ActivationDict:
     """
@@ -168,7 +169,7 @@ def eap_integrated_gradients(
     inputs: dict[str, torch.Tensor],
     baseline_embeddings: ActivationDict,
     layer_components: list[tuple[int, str]] | None = None,
-    metric_fn: Callable = torch.mean,
+    metric_fn: Callable = partial(torch.mean, dim=-1),
     position: slice | int | Sequence | None = -1,
     steps: int = 5,
 ) -> ActivationDict:

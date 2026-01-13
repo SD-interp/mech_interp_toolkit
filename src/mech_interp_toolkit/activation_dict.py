@@ -11,7 +11,57 @@ class FrozenError(RuntimeError):
     pass
 
 
-class ArithmeticOperation(ABC, dict[tuple[int, str], torch.Tensor]):
+class FreezableDict(ABC, dict):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._frozen = False
+
+    def freeze(self):
+        """Freeze the dictionary, making it immutable."""
+        self._frozen = True
+        return self
+
+    def unfreeze(self):
+        """Unfreeze the dictionary, making it mutable."""
+        self._frozen = False
+        return self
+
+    def _check_frozen(self):
+        if getattr(self, "_frozen", False):
+            raise FrozenError(
+                "This object is frozen and cannot be modified."
+            )
+
+    def __setitem__(self, key, value):
+        self._check_frozen()
+        return super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        self._check_frozen()
+        return super().__delitem__(key)
+
+    def clear(self):
+        self._check_frozen()
+        return super().clear()
+
+    def pop(self, *args):
+        self._check_frozen()
+        return super().pop(*args)
+
+    def popitem(self):
+        self._check_frozen()
+        return super().popitem()
+
+    def setdefault(self, *args):
+        self._check_frozen()
+        return super().setdefault(*args)
+
+    def update(self, *args, **kwargs):
+        self._check_frozen()
+        return super().update(*args, **kwargs)
+
+
+class ArithmeticOperation(FreezableDict):
     def __init__(self, config=None, positions=None) -> None:
         super().__init__()
         self.config = config
@@ -20,25 +70,18 @@ class ArithmeticOperation(ABC, dict[tuple[int, str], torch.Tensor]):
     def check_compatibility(self, other):
         if not isinstance(other, ActivationDict):
             raise ValueError("Operand must be an instance of ActivationDict.")
-        if self.config != other.config:
-            raise ValueError(
-                "ActivationDicts must have the same config for arithmetic operations."
-            )
-        if self.positions != other.positions:
-            raise ValueError(
-                "ActivationDicts must have the same positions for arithmetic operations."
-            )
+
         if self.keys() != other.keys():
-            raise ValueError(
-                "ActivationDicts must have the same keys for arithmetic operations."
-            )
+            warnings.warn(
+                "ActivationDicts have different keys; only matching keys will be processed.")
 
     def __add__(self, other) -> Self:
         self.check_compatibility(other)
         if isinstance(other, ActivationDict):
             result = type(self)(self.config, self.positions)
             for key in self.keys():
-                result[key] = self[key] + other[key]
+                if key in other:
+                    result[key] = self[key] + other[key]
             return result
         else:
             raise NotImplementedError(
@@ -53,7 +96,8 @@ class ArithmeticOperation(ABC, dict[tuple[int, str], torch.Tensor]):
         if isinstance(other, ActivationDict):
             result = type(self)(self.config, self.positions)
             for key in self.keys():
-                result[key] = self[key] - other[key]
+                if key in other:
+                    result[key] = self[key] - other[key]
             return result
         else:
             raise NotImplementedError(
@@ -65,7 +109,8 @@ class ArithmeticOperation(ABC, dict[tuple[int, str], torch.Tensor]):
             self.check_compatibility(other)
             result = type(self)(self.config, self.positions)
             for key in self.keys():
-                result[key] = self[key] * other[key]
+                if key in other:
+                    result[key] = self[key] * other[key]
             return result
         elif isinstance(other, (int, float, torch.Tensor)):
             result = type(self)(self.config, self.positions)
@@ -85,7 +130,8 @@ class ArithmeticOperation(ABC, dict[tuple[int, str], torch.Tensor]):
             self.check_compatibility(other)
             result = type(self)(self.config, self.positions)
             for key in self.keys():
-                result[key] = self[key] / other[key]
+                if key in other:
+                    result[key] = self[key] / other[key]
             return result
         elif isinstance(other, (int, float, torch.Tensor)):
             result = type(self)(self.config, self.positions)
@@ -126,7 +172,6 @@ class ActivationDict(ArithmeticOperation):
         self.num_kv_heads = getattr(config, "num_key_value_heads", self.num_heads)
         self.fused_heads = True
         self.positions = positions
-        self._frozen = False
         self.value_type = value_type  # e.g., 'activation' or 'gradient' or 'scores'
         self.attention_mask = torch.tensor([])  # Placeholder for attention mask
 
@@ -149,50 +194,6 @@ class ActivationDict(ArithmeticOperation):
         for key in keys:
             new_dict[key] = self[key]
         return new_dict
-
-    def freeze(self):
-        """Freeze the ActivationDict, making it immutable."""
-        self._frozen = True
-        return self
-
-    def unfreeze(self):
-        """Unfreeze the ActivationDict, making it mutable."""
-        self._frozen = False
-        return self
-
-    def _check_frozen(self):
-        if self._frozen:
-            raise FrozenError(
-                "ActivationDict is frozen and cannot be modified, heads can still be split and merged."
-            )
-
-    def __setitem__(self, key, value):
-        self._check_frozen()
-        return super().__setitem__(key, value)
-
-    def __delitem__(self, key):
-        self._check_frozen()
-        return super().__delitem__(key)
-
-    def clear(self):
-        self._check_frozen()
-        return super().clear()
-
-    def pop(self, *args):
-        self._check_frozen()
-        return super().pop(*args)
-
-    def popitem(self):
-        self._check_frozen()
-        return super().popitem()
-
-    def setdefault(self, *args):
-        self._check_frozen()
-        return super().setdefault(*args)
-
-    def update(self, *args, **kwargs):
-        self._check_frozen()
-        return super().update(*args, **kwargs)
 
     def split_heads(self):
         """
@@ -275,3 +276,20 @@ class ActivationDict(ArithmeticOperation):
         for key in self.keys():
             self[key] = self[key].cpu()
         return self
+
+    def zeros_like(self, keys: list[tuple[int, str]]) -> Self:
+        """
+        Creates a new ActivationDict with zero tensors for the specified keys,
+        matching the shapes of the original tensors.
+        """
+        new_obj = type(self)(self.config, self.positions)
+        new_obj.value_type = self.value_type
+        new_obj.attention_mask = self.attention_mask
+
+        for key in keys:
+            if key in self:
+                new_obj[key] = torch.zeros_like(self[key])
+            else:
+                warnings.warn(f"Key {key} not found in ActivationDict. Skipping.")
+
+        return new_obj
