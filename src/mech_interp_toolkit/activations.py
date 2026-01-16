@@ -1,17 +1,40 @@
+import warnings
+from collections.abc import Callable, Sequence
+from typing import Any, NotRequired, TypedDict, cast
+
 import torch
 from nnsight import NNsight
-from .utils import input_dict_to_tuple, regularize_position
-from collections.abc import Sequence, Callable
-import warnings
-from typing import Optional, Any, cast
+
 from .activation_dict import ActivationDict
+from .utils import input_dict_to_tuple, regularize_position
+
+type Position = slice | int | Sequence | None
+type LayerComponent = list[tuple[int, str]]
+type LayerHead = list[tuple[int, int]]
+
+
+class AccessGradients(TypedDict):
+    metric_fn: Callable[[torch.Tensor], torch.Tensor]
+    compute_metric_at: LayerComponent
+
+
+class AccessActivations(TypedDict):
+    positions: Position
+    locations: LayerComponent
+    gradients: AccessGradients
+
+
+class SpecDict(TypedDict):
+    patching: NotRequired[ActivationDict]
+    activations: NotRequired[AccessActivations]
+    stop_at_layer: NotRequired[int]
 
 
 def create_z_patch_dict(
     original_acts: ActivationDict,
     new_acts: ActivationDict,
-    layer_head: list[tuple[int, int]],
-    position: None | int | Sequence[int] | slice = None,
+    layer_head: LayerHead,
+    position: Position = None,
 ):
     """
     Creates a new ActivationDict for patching 'z' activations.
@@ -94,155 +117,115 @@ def _locate_layer_component(model, trace, layer: int, component: str):
     return comp
 
 
-def _extract_or_patch(
-    model,
-    trace,
-    layer,
-    component,
-    position,
-    capture_grad: bool = False,
-    patch_value: Optional[torch.Tensor] = None,
-):
-    if trace is None:
-        raise ValueError("Active trace is required to locate layer components.")
+class UnifiedAccessAndPatching:
+    def __init__(
+        self,
+        model: NNsight,
+        inputs: dict[str, torch.Tensor],
+        spec_dict: SpecDict,
+    ):
+        input_tuple = input_dict_to_tuple(inputs)
+        self.input_ids, self.attention_mask, self.position_ids = input_tuple
+        self.model = model
+        self.spec_dict = spec_dict
 
-    attn_implementation = model.model.config._attn_implementation
+        self.stop_at_layer = spec_dict.get("stop_at_layer")
 
-    if attn_implementation != "eager":
-        warnings.warn(
-            f"attn_implementation '{attn_implementation}' can give incorrect results for z patches or gradients."
-        )
+        self.patching_dict = spec_dict.get("patching")
+        self.acts_dict = spec_dict.get("activations")
 
-    comp = _locate_layer_component(model, trace, layer, component)
-    if patch_value is not None:
-        comp[:, position, :] = patch_value
-        act = None
-    else:
-        act = comp[:, position, :].save()
+        self.loop_components = ActivationDict(model.model.config, -1)  # dummy
 
-    if capture_grad:
-        comp.retain_grad()
-        grad = comp.grad.save()
-    else:
-        grad = None
-    return act, grad
+        if self.patching_dict:
+            temp = [(x, None) for x in self.patching_dict]
+            self.loop_components.update(temp)
 
+        if self.acts_dict:
+            temp = [(x, None) for x in self.acts_dict["locations"]]
+            self.loop_components.update(temp)
+            self.output = ActivationDict(
+                model.model.config, self.acts_dict["positions"]
+            )
+            self.capture_grads = "gradients" in self.acts_dict
+        else:
+            self.capture_grads = False
 
-def get_activations_and_grads(
-    model: NNsight,
-    inputs: dict[str, torch.Tensor],
-    layers_components: Sequence[tuple[int, str]],
-    metric_fn: Optional[Callable[[torch.Tensor], torch.Tensor]],
-    position: slice | int | Sequence | None = -1,
-    stop_at_layer: Optional[int] = None,
-) -> tuple[ActivationDict, ActivationDict, torch.Tensor]:
-    """Get activations and gradients of specific components at given layers."""
+    def __enter__(self):
+        return self
 
-    capture_grad = metric_fn is not None
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
 
-    if capture_grad and stop_at_layer is not None:
-        warnings.warn(
-            "stop_at_layer is not compatible with gradient computation. Skipping gradient computation."
-        )
-        capture_grad = False
+    def warning_for_attn_type(self, loop_components):
+        attn_implementation = self.model.model.config._attn_implementation  # type: ignore
+        for _, component in loop_components:
+            if component == "z":
+                if attn_implementation != "eager":
+                    warnings.warn(
+                        f"attn_implementation '{attn_implementation}' can give incorrect results for z"
+                    )
 
-    input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
-    position = regularize_position(position)
+    @staticmethod
+    def patch_fn(original, new_value, position):
+        original = original.clone()
+        original[:, position, :] = new_value
+        return original
 
-    acts_output = ActivationDict(model.model.config, position, value_type="activation")
-    grads_output = ActivationDict(model.model.config, position, value_type="gradient")
+    def _unified_access_and_patching(self):
+        self.warning_for_attn_type(self.loop_components)
 
-    acts_output.attention_mask = attention_mask
-    grads_output.attention_mask = attention_mask
+        context = torch.enable_grad if self.capture_grads else torch.no_grad
 
-    context = torch.enable_grad if capture_grad else torch.no_grad
-
-    logits = None
-
-    with context():
-        with model.trace(input_ids, attention_mask, position_ids) as tracer:
-            for layer, component in layers_components:
-                if stop_at_layer is not None:
-                    if layer >= stop_at_layer:
+        with (
+            context(),
+            self.model.trace(
+                self.input_ids, self.attention_mask, self.position_ids
+            ) as tracer,
+        ):
+            for layer, component in self.loop_components:
+                # This is here to prevent autoformatter from removing line
+                if self.stop_at_layer is not None:
+                    if layer > self.stop_at_layer:
                         tracer.stop()
-                act, grad = _extract_or_patch(
-                    model, tracer, layer, component, position, capture_grad=capture_grad
-                )
-                acts_output[(layer, component)] = act
-                if grad is not None:
-                    grads_output[(layer, component)] = grad
-            logits = model.lm_head.output[:, -1, :].save()  # type: ignore
 
-            if capture_grad:
-                metric = metric_fn(logits)  # type: ignore
-                metric.backward()
+                comp = _locate_layer_component(self.model, tracer, layer, component)
 
-    return acts_output, grads_output, logits
+                if (
+                    self.patching_dict is not None
+                    and (layer, component) in self.patching_dict
+                ):
+                    patch_pos = self.patching_dict.positions
+                    patch_pos = regularize_position(patch_pos)
+                    comp[:] = self.patch_fn(
+                        comp, self.patching_dict[(layer, component)], patch_pos
+                    )
 
+                if (
+                    self.acts_dict is not None
+                    and (layer, component) in self.acts_dict["locations"]
+                ):
+                    if self.capture_grads:
+                        self.output[(layer, component)] = comp.save()
+                        self.output[(layer, component)].retain_grad()
+                    else:
+                        cache_pos = self.acts_dict["positions"]
+                        self.output[(layer, component)] = comp[:, cache_pos, :].save()
 
-def get_activations(*args, **kwargs):
-    return get_activations_and_grads(*args, metric_fn=None, **kwargs)
+            logits = self.model.lm_head.output[:, [-1], :].save()  # type: ignore
 
+            if self.capture_grads:
+                assert self.acts_dict is not None
 
-def patch_activations(
-    model: NNsight,
-    inputs: dict[str, torch.Tensor],
-    patching_dict: ActivationDict,
-    layers_components: Sequence[tuple[int, str]] = [],
-    metric_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-    position: slice | Sequence[int] | int | None = -1,
-) -> tuple[ActivationDict, ActivationDict, torch.Tensor]:
-    if not patching_dict.fused_heads:
-        raise ValueError("head activations must be fused before patching")
+                metric_fn = self.acts_dict["gradients"]["metric_fn"]
+                metric_layer, metric_component = self.acts_dict["gradients"][
+                    "compute_metric_at"
+                ]
 
-    capture_grad = metric_fn is not None
-
-    input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
-
-    position = regularize_position(position)
-
-    acts_output = ActivationDict(model.model.config, position, value_type="activation")
-    grads_output = ActivationDict(model.model.config, position, value_type="gradient")
-
-    acts_output.attention_mask = attention_mask
-    grads_output.attention_mask = attention_mask
-
-    logits = None
-    grads = None
-
-    patching_dict.unfreeze()
-    patching_dict.update([(x, None) for x in layers_components])
-    patching_dict.reorganize()
-
-    context = torch.enable_grad if capture_grad else torch.no_grad
-
-    with context():
-        with model.trace(input_ids, attention_mask, position_ids) as trace:  # noqa: F841
-            for (layer, component), patch in patching_dict.items():
-                if (layer, component) not in layers_components:
-                    _capture_grad = False
+                if metric_component == "logits":
+                    metric = metric_fn(logits)
                 else:
-                    _capture_grad = capture_grad
+                    metric = metric_fn(self.output[(metric_layer, metric_component)])
 
-                acts, grads = _extract_or_patch(
-                    model,
-                    trace,
-                    layer,
-                    component,
-                    position,
-                    capture_grad=_capture_grad,
-                    patch_value=patch,
-                )
-
-                if (layer, component) in layers_components:
-                    acts_output[(layer, component)] = acts
-                    if grads is not None:
-                        grads_output[(layer, component)] = grads
-
-            logits = model.lm_head.output[:, -1, :].save()  # type: ignore
-
-            if capture_grad:
-                metric = metric_fn(logits)
                 metric.backward()
 
-    return acts_output, grads_output, logits
+        return self.output if hasattr(self, "output") else None, logits

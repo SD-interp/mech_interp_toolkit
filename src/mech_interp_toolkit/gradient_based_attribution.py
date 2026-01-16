@@ -13,7 +13,7 @@ def _get_acts_and_grads(
     clean_inputs: dict[str, torch.Tensor],
     corrupted_inputs: dict[str, torch.Tensor],
     compute_grad_at: Literal["clean", "corrupted"] = "clean",
-    metric_fn: Callable = partial(torch.mean, dim=-1),
+    metric_fn: Callable = torch.mean,
     position: slice | int | Sequence | None = -1,
 ) -> tuple[ActivationDict, ActivationDict, Optional[ActivationDict]]:
     """
@@ -89,7 +89,7 @@ def edge_attribution_patching(
     clean_inputs: dict[str, torch.Tensor],
     corrupted_inputs: dict[str, torch.Tensor],
     compute_grad_at: Literal["clean", "corrupted"] = "clean",
-    metric_fn: Callable = partial(torch.mean, dim=-1),
+    metric_fn: Callable = torch.mean,
     position: slice | int | Sequence | None = -1,
 ) -> ActivationDict:
     """
@@ -113,7 +113,7 @@ def simple_integrated_gradients(
     model: NNsight,
     inputs: dict[str, torch.Tensor],
     baseline_embeddings: ActivationDict,
-    metric_fn: Callable = partial(torch.mean, dim=-1),
+    metric_fn: Callable = torch.mean,
     steps: int = 50,
 ) -> ActivationDict:
     """
@@ -169,7 +169,7 @@ def eap_integrated_gradients(
     inputs: dict[str, torch.Tensor],
     baseline_embeddings: ActivationDict,
     layer_components: list[tuple[int, str]] | None = None,
-    metric_fn: Callable = partial(torch.mean, dim=-1),
+    metric_fn: Callable = torch.mean,
     position: slice | int | Sequence | None = -1,
     steps: int = 5,
 ) -> ActivationDict:
@@ -217,7 +217,7 @@ def eap_integrated_gradients(
         else:
             accumulated_grads = accumulated_grads + (grads / steps)
 
-    integrated_grads = (
-        (embeddings - baseline_embeddings) * accumulated_grads
-    ).apply(torch.sum, dim=-1)
+    integrated_grads = ((embeddings - baseline_embeddings) * accumulated_grads).apply(
+        torch.sum, dim=-1
+    )
     return integrated_grads
