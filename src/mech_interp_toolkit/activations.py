@@ -171,7 +171,7 @@ class UnifiedAccessAndPatching:
         original[:, position, :] = new_value
         return original
 
-    def _unified_access_and_patching(self):
+    def unified_access_and_patching(self):
         self.warning_for_attn_type(self.loop_components)
 
         context = torch.enable_grad if self.capture_grads else torch.no_grad
@@ -229,3 +229,7 @@ class UnifiedAccessAndPatching:
                 metric.backward()
 
         return self.output if hasattr(self, "output") else None, logits
+
+    @staticmethod
+    def patch_fn_example(acts):
+        return acts[:, -1, :].sum()
