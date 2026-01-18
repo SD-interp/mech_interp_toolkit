@@ -1,14 +1,10 @@
-import json
 import random
-from collections.abc import MutableMapping, Sequence
-from pathlib import Path
+from collections.abc import Sequence
 from typing import Optional, Tuple, Union, cast
 
 import numpy as np
-import requests
 import torch
 from nnsight import Envoy, NNsight
-from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
@@ -75,88 +71,6 @@ def load_model_tokenizer_config(
     return model, tokenizer, config
 
 
-def get_prompts_from_url(url: str, save_path: Union[str, Path] = "data/prompts.json") -> None:
-    """
-    Downloads prompts from a URL and saves them to a local file.
-
-    Args:
-        url: The URL to download the prompts from.
-        save_path: The local path to save the prompts to.
-    """
-    response = requests.get(url)
-    data = response.json()
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if "metadata" not in data or ("questions" not in data and "pairs" not in data):
-        raise ValueError("Incorrect schema in fetched data.")
-
-    with save_path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
-
-
-def build_dataloader(
-    dataset: Union[torch.Tensor, list],
-    batch_size: Optional[int],
-) -> DataLoader:
-    """
-    Creates a DataLoader from a given dataset.
-
-    Args:
-        dataset: The dataset to create the DataLoader from.
-        batch_size: The batch size for the DataLoader.
-
-    Returns:
-        The created DataLoader.
-    """
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        pin_memory=True,
-    )
-
-
-def get_position_ids(attention_mask: torch.Tensor) -> torch.Tensor:
-    """
-    Generates position IDs from an attention mask.
-
-    Args:
-        attention_mask: The attention mask tensor.
-
-    Returns:
-        The position IDs tensor.
-    """
-    position_ids = attention_mask.long().cumsum(-1) - 1
-    position_ids.masked_fill_(attention_mask == 0, 1)
-    return position_ids
-
-
-def input_dict_to_tuple(
-    input_dict: dict[str, torch.Tensor], device: Optional[str] = None
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Converts an input dictionary of tensors to a tuple of tensors on a specified device.
-
-    Args:
-        input_dict: The input dictionary.
-        device: The device to move the tensors to. If None, defaults to 'cuda' if available, otherwise 'cpu'.
-
-    Returns:
-        A tuple of tensors (input_ids, attention_mask, position_ids).
-    """
-    if device is None:
-        device = get_default_device()
-
-    if isinstance(input_dict, MutableMapping):
-        input_ids = input_dict["input_ids"].to(device)
-        attention_mask = input_dict["attention_mask"].to(device)
-        position_ids = get_position_ids(attention_mask).to(device)
-        return input_ids, attention_mask, position_ids
-    else:
-        raise TypeError("Input must be a dictionary-like object.")
-
-
 def get_logit_difference(
     logits: torch.Tensor,
     tokenizer: ChatTemplateTokenizer,
@@ -173,9 +87,9 @@ def get_logit_difference(
     Returns:
         The difference in logits.
     """
-    tokA_id = tokenizer.tokenizer.encode(tokens[0], add_special_tokens=False)[0]
-    tokB_id = tokenizer.tokenizer.encode(tokens[1], add_special_tokens=False)[0]
-    return logits[:, tokA_id] - logits[:, tokB_id]
+    tok_a_id = tokenizer.tokenizer.encode(tokens[0], add_special_tokens=False)[0]
+    tok_b_id = tokenizer.tokenizer.encode(tokens[1], add_special_tokens=False)[0]
+    return logits[:, tok_a_id] - logits[:, tok_b_id]
 
 
 def regularize_position(
