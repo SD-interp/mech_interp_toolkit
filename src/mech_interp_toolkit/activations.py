@@ -222,6 +222,7 @@ class UnifiedAccessAndPatching:
                     ):
                         if self._capture_grads:
                             self.output[(layer, component)] = comp.save()
+                            self.output[(layer, component)].requires_grad_()
                             self.output[(layer, component)].retain_grad()
                         else:
                             cache_pos = self.acts_dict["positions"]
