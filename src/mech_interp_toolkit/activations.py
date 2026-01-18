@@ -147,7 +147,6 @@ class UnifiedAccessAndPatching:
                     """slicing and indexing when capturing gradients is not supported.
                     All positions will be captured by default. Use output.extract_positions() instead"""
                 )
-
         else:
             self._capture_grads = False
 
@@ -187,47 +186,61 @@ class UnifiedAccessAndPatching:
         self.warning_for_attn_type(self.loop_components)
 
         context = torch.enable_grad if self._capture_grads else torch.no_grad
+        model_input_dict = {
+            "attention_mask": self.attention_mask,
+            "position_ids": self.position_ids,
+        }
+
+        if self.inputs_embeds is None:
+            model_input_dict["input_ids"] = self.input_ids
+        else:
+            model_input_dict["inputs_embeds"] = self.inputs_embeds
 
         with (
             context(),
-            self.model.trace(input_ids=self.input_ids, attention_mask=self.attention_mask, position_ids=self.position_ids) as tracer,
+            self.model.trace() as tracer,
         ):
-            for layer, component in self.loop_components:
-                # This is here to prevent autoformatter from removing line
-                if self.stop_at_layer is not None:
-                    if layer > self.stop_at_layer:
-                        tracer.stop()
+            with tracer.invoke(**model_input_dict):
+                for layer, component in self.loop_components:
+                    # This is here to prevent autoformatter from removing line
+                    if self.stop_at_layer is not None:
+                        if layer > self.stop_at_layer:
+                            tracer.stop()
 
-                comp = _locate_layer_component(self.model, tracer, layer, component)
+                    comp = _locate_layer_component(self.model, tracer, layer, component)
 
-                if self.patching_dict is not None and (layer, component) in self.patching_dict:
-                    patch_pos = self.patching_dict.positions
-                    patch_pos = regularize_position(patch_pos)
-                    comp[:] = self.patch_fn(comp, self.patching_dict[(layer, component)], patch_pos)
+                    if self.patching_dict is not None and (layer, component) in self.patching_dict:
+                        patch_pos = self.patching_dict.positions
+                        patch_pos = regularize_position(patch_pos)
+                        comp[:] = self.patch_fn(
+                            comp, self.patching_dict[(layer, component)], patch_pos
+                        )
 
-                if self.acts_dict is not None and (layer, component) in self.acts_dict["locations"]:
-                    if self._capture_grads:
-                        self.output[(layer, component)] = comp.save()
-                        self.output[(layer, component)].requires_grad_()
-                        self.output[(layer, component)].retain_grad()
+                    if (
+                        self.acts_dict is not None
+                        and (layer, component) in self.acts_dict["locations"]
+                    ):
+                        if self._capture_grads:
+                            self.output[(layer, component)] = comp.save()
+                            self.output[(layer, component)].retain_grad()
+                        else:
+                            cache_pos = self.acts_dict["positions"]
+                            self.output[(layer, component)] = comp[:, cache_pos, :].save()
+
+                logits = self.model.lm_head.output[:, [-1], :].save()  # type: ignore
+
+                if self._capture_grads:
+                    metric_fn = self.acts_dict["gradients"]["metric_fn"]  # type: ignore
+                    metric_layer, metric_component = self.acts_dict["gradients"][  # type: ignore
+                        "compute_metric_at"
+                    ]
+
+                    if metric_component == "logits":
+                        metric = metric_fn(logits)
                     else:
-                        cache_pos = self.acts_dict["positions"]
-                        self.output[(layer, component)] = comp[:, cache_pos, :].save()
+                        metric = metric_fn(self.output[(metric_layer, metric_component)])
 
-            logits = self.model.lm_head.output[:, [-1], :].save()  # type: ignore
-
-            if self._capture_grads:
-                metric_fn = self.acts_dict["gradients"]["metric_fn"]  # type: ignore
-                metric_layer, metric_component = self.acts_dict["gradients"][  # type: ignore
-                    "compute_metric_at"
-                ]
-
-                if metric_component == "logits":
-                    metric = metric_fn(logits)
-                else:
-                    metric = metric_fn(self.output[(metric_layer, metric_component)])
-
-                metric.backward()
+                    metric.backward()
 
         return self.output if hasattr(self, "output") else None, logits
 

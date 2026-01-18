@@ -134,10 +134,9 @@ def simple_integrated_gradients(
     for alpha in alphas:
         interpolated_embeddings = _interpolate_activations(
             input_embeddings, baseline_embeddings, alpha
-        )
+        )[(0, "layer_in")]
 
         spec_dict: SpecDict = {
-            "patching": interpolated_embeddings,
             "activations": {
                 "positions": position,
                 "locations": [embedding_key],
@@ -148,7 +147,7 @@ def simple_integrated_gradients(
             },
         }
 
-        with UAP(model, inputs, spec_dict) as uap:
+        with UAP(model, inputs, spec_dict, inputs_embeds=interpolated_embeddings) as uap:
             acts, _ = uap.unified_access_and_patching()
             if acts is None:
                 raise RuntimeError("Failed to retrieve activations.")
