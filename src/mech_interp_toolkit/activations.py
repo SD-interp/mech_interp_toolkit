@@ -116,11 +116,13 @@ class UnifiedAccessAndPatching:
         model: NNsight,
         inputs: dict[str, torch.Tensor],
         spec_dict: SpecDict,
+        inputs_embeds: Optional[torch.Tensor] = None,
     ):
         input_tuple = input_dict_to_tuple(inputs)
         self.input_ids, self.attention_mask, self.position_ids = input_tuple
         self.model = model
         self.spec_dict = spec_dict
+        self.inputs_embeds = inputs_embeds
 
         self.stop_at_layer = spec_dict.get("stop_at_layer")
 
@@ -177,12 +179,9 @@ class UnifiedAccessAndPatching:
     def patch_fn(
         self, original: torch.Tensor, new_value: torch.Tensor, position: Position
     ) -> torch.Tensor:
-        original = original.clone()
-        original[:, position, :] = new_value
-        if self._capture_grads:
-            original.requires_grad_()
-            original.retain_grad()
-        return original
+        mask = torch.zeros_like(original, dtype=torch.bool)
+        mask[:, position, :] = True
+        return torch.where(mask, new_value, original)
 
     def unified_access_and_patching(self) -> tuple[Optional[ActivationDict], torch.Tensor]:
         self.warning_for_attn_type(self.loop_components)
@@ -191,7 +190,7 @@ class UnifiedAccessAndPatching:
 
         with (
             context(),
-            self.model.trace(self.input_ids, self.attention_mask, self.position_ids) as tracer,
+            self.model.trace(input_ids=self.input_ids, attention_mask=self.attention_mask, position_ids=self.position_ids) as tracer,
         ):
             for layer, component in self.loop_components:
                 # This is here to prevent autoformatter from removing line

@@ -37,7 +37,7 @@ def get_attention_pattern(
     input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
 
     with torch.no_grad():
-        with model.trace(input_ids, attention_mask, position_ids) as trace:  # noqa: F841
+        with model.trace(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids) as trace:  # noqa: F841
             for i, layer in enumerate(layers):
                 heads = list(head_indices[i])
                 output[layer] = (
