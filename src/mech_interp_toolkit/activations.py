@@ -174,12 +174,14 @@ class UnifiedAccessAndPatching:
                         f"attn_implementation '{attn_implementation}' can give incorrect results for z"
                     )
 
-    @staticmethod
     def patch_fn(
-        original: torch.Tensor, new_value: torch.Tensor, position: Position
+        self, original: torch.Tensor, new_value: torch.Tensor, position: Position
     ) -> torch.Tensor:
         original = original.clone()
         original[:, position, :] = new_value
+        if self._capture_grads:
+            original.requires_grad_()
+            original.retain_grad()
         return original
 
     def unified_access_and_patching(self) -> tuple[Optional[ActivationDict], torch.Tensor]:
