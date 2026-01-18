@@ -82,14 +82,14 @@ class LinearProbe:
         train_idx, test_idx = train_test_split(indices, test_size=self.test_split)
 
         # Slice data based on indices
-        X_train_raw = inputs_full[train_idx]
+        X_train_raw = inputs_full[train_idx]  # noqa: N806
         y_train_raw = target[train_idx]
-        X_test_raw = inputs_full[test_idx]
+        X_test_raw = inputs_full[test_idx]  # noqa: N806
         y_test_raw = target[test_idx]
 
         # Now flatten/broadcast train and test independently
-        X_train, y_train = self._process_batch(X_train_raw, y_train_raw)
-        X_test, y_test = self._process_batch(X_test_raw, y_test_raw)
+        X_train, y_train = self._process_batch(X_train_raw, y_train_raw)  # noqa: N806
+        X_test, y_test = self._process_batch(X_test_raw, y_test_raw)  # noqa: N806
 
         return X_train, X_test, y_train, y_test
 
@@ -104,11 +104,11 @@ class LinearProbe:
         print(f"{label} {metric_name}: {metric:.4f}")
 
     def fit(self, activations: ActivationDict, target: torch.Tensor | np.ndarray) -> "LinearProbe":
-        X_train, X_test, y_train, y_test = self.prepare_data(activations, target)
+        X_train, X_test, y_train, y_test = self.prepare_data(activations, target)  # noqa: N806
 
         if y_test is None or y_train is None:
             raise ValueError("Target cannot be None for fitting the linear probe.")
-        
+
         print(f"Train set size: {len(X_train)}, Test set size: {len(X_test)}")
 
         self.linear_model.fit(X_train, y_train)

@@ -3,6 +3,7 @@ from typing import cast
 import torch
 from transformers import PreTrainedTokenizer
 
+
 class ChatTemplateTokenizer:
     """
     A wrapper for Hugging Face tokenizers that applies a chat template and tokenizes the input.
@@ -16,17 +17,24 @@ class ChatTemplateTokenizer:
         suffix (str, optional): A suffix to append to the formatted prompt. Defaults to "".
         system_prompt (str, optional): The system prompt to use. Defaults to "You are a strategic planning assistant that follows user instructions carefully".
     """
-    def __init__(self, tokenizer: PreTrainedTokenizer, suffix: str = "",
-                 system_prompt: str = "You are a strategic planning assistant that follows user instructions carefully"):
+
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        suffix: str = "",
+        system_prompt: str = "You are a strategic planning assistant that follows user instructions carefully",
+    ):
         self.tokenizer = tokenizer
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        
+
         self.system_prompt: str = system_prompt
-        self.structured_prompt: list[str]|None = None
+        self.structured_prompt: list[str] | None = None
         self.suffix = suffix
 
-    def _apply_chat_template(self, base_prompts: str|list[str], thinking: bool = False) -> list[str]:
+    def _apply_chat_template(
+        self, base_prompts: str | list[str], thinking: bool = False
+    ) -> list[str]:
         """
         Applies the chat template to the base prompts.
 
@@ -39,7 +47,7 @@ class ChatTemplateTokenizer:
         """
         if isinstance(base_prompts, str):
             base_prompts = [base_prompts]
-        
+
         instruct_syntax_prompts = [
             [
                 {"role": "system", "content": self.system_prompt},
@@ -47,18 +55,22 @@ class ChatTemplateTokenizer:
             ]
             for user_prompt in base_prompts
         ]
-        
+
         formatted_prompts = [
             self.tokenizer.apply_chat_template(
-            prompt, tokenize=False, add_special_tokens=True, 
-            add_generation_prompt=True, enable_thinking=thinking
-            ) + self.suffix #type: ignore
+                prompt,
+                tokenize=False,
+                add_special_tokens=True,
+                add_generation_prompt=True,
+                enable_thinking=thinking,
+            )
+            + self.suffix  # type: ignore
             for prompt in instruct_syntax_prompts
-            ]
+        ]
         formatted_prompts = cast(list[str], formatted_prompts)
         self.structured_prompt = formatted_prompts
         return formatted_prompts
-        
+
     def _encode(self, formatted_prompts: list[str]) -> dict[str, torch.Tensor]:
         """
         Tokenizes the formatted prompts.
@@ -77,8 +89,8 @@ class ChatTemplateTokenizer:
         )
         tokenized = cast(dict[str, torch.Tensor], tokenized)
         return tokenized
-    
-    def __call__(self, prompts: str|list[str], thinking: bool = False) -> dict[str, torch.Tensor]:
+
+    def __call__(self, prompts: str | list[str], thinking: bool = False) -> dict[str, torch.Tensor]:
         """
         Applies the chat template and tokenizes the prompts.
 

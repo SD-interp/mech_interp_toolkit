@@ -1,6 +1,6 @@
 import warnings
 from collections.abc import Callable, Sequence
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any, NotRequired, Optional, TypedDict, cast
 
 import torch
 from nnsight import NNsight
@@ -90,9 +90,7 @@ def create_z_patch_dict(
     return patch_dict
 
 
-def _locate_layer_component(
-    model: NNsight, trace: Any, layer: int, component: str
-) -> Any:
+def _locate_layer_component(model: NNsight, trace: Any, layer: int, component: str) -> Any:
     if trace is None:
         raise ValueError("Active trace is required to locate layer components.")
 
@@ -108,9 +106,7 @@ def _locate_layer_component(
     elif component == "layer_out":
         comp = layers[layer].output
     else:
-        raise ValueError(
-            "component must be one of {'attn', 'mlp', 'z', 'layer_in', 'layer_out'}"
-        )
+        raise ValueError("component must be one of {'attn', 'mlp', 'z', 'layer_in', 'layer_out'}")
     return comp
 
 
@@ -138,19 +134,15 @@ class UnifiedAccessAndPatching:
             self.loop_components.update(temp)
 
         if self.acts_dict:
-            self.acts_dict["positions"] = regularize_position(
-                self.acts_dict["positions"]
-            )
+            self.acts_dict["positions"] = regularize_position(self.acts_dict["positions"])
             temp = [(x, None) for x in self.acts_dict["locations"]]
             self.loop_components.update(temp)
-            self.output = ActivationDict(
-                model.model.config, self.acts_dict["positions"]
-            )
+            self.output = ActivationDict(model.model.config, self.acts_dict["positions"])
             self._capture_grads = bool(self.acts_dict.get("gradients"))
 
             if self._capture_grads and self.acts_dict["positions"] != slice(None):
                 warnings.warn(
-                    """slicing and indexing when capturing gradients is not supported. 
+                    """slicing and indexing when capturing gradients is not supported.
                     All positions will be captured by default. Use output.extract_positions() instead"""
                 )
 
@@ -197,9 +189,7 @@ class UnifiedAccessAndPatching:
 
         with (
             context(),
-            self.model.trace(
-                self.input_ids, self.attention_mask, self.position_ids
-            ) as tracer,
+            self.model.trace(self.input_ids, self.attention_mask, self.position_ids) as tracer,
         ):
             for layer, component in self.loop_components:
                 # This is here to prevent autoformatter from removing line
@@ -209,20 +199,12 @@ class UnifiedAccessAndPatching:
 
                 comp = _locate_layer_component(self.model, tracer, layer, component)
 
-                if (
-                    self.patching_dict is not None
-                    and (layer, component) in self.patching_dict
-                ):
+                if self.patching_dict is not None and (layer, component) in self.patching_dict:
                     patch_pos = self.patching_dict.positions
                     patch_pos = regularize_position(patch_pos)
-                    comp[:] = self.patch_fn(
-                        comp, self.patching_dict[(layer, component)], patch_pos
-                    )
+                    comp[:] = self.patch_fn(comp, self.patching_dict[(layer, component)], patch_pos)
 
-                if (
-                    self.acts_dict is not None
-                    and (layer, component) in self.acts_dict["locations"]
-                ):
+                if self.acts_dict is not None and (layer, component) in self.acts_dict["locations"]:
                     if self._capture_grads:
                         self.output[(layer, component)] = comp.save()
                         self.output[(layer, component)].retain_grad()

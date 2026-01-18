@@ -1,11 +1,12 @@
 from collections.abc import Sequence
+from typing import cast
 
 import einops
 import torch
 from nnsight import NNsight
 
 from .activations import SpecDict
-from .activations import UnifiedAccessAndPatching as UAP
+from .activations import UnifiedAccessAndPatching as UAP  # noqa: N814
 from .utils import ChatTemplateTokenizer, get_all_layer_components, get_num_layers
 
 
@@ -70,9 +71,7 @@ def run_componentwise_dla(
     layers_components.append((n_layers - 1, "layer_out"))
 
     # Get activations
-    spec_dict: SpecDict = {
-        "activations": {"positions": -1, "locations": layers_components}
-    }
+    spec_dict: SpecDict = {"activations": {"positions": -1, "locations": layers_components}}
     with UAP(model, inputs, spec_dict) as uap:
         activations, _ = uap.unified_access_and_patching()
 
@@ -115,16 +114,14 @@ def run_headwise_dla_for_layer(
         A tensor containing the DLA results for each head.
     """
     proj_weight = model.model.layers[layer].self_attn.o_proj.weight  # type: ignore
-    num_heads = model.model.config.num_attention_heads  # type: ignore
+    num_heads = cast(int, model.model.config.num_attention_heads)  # type: ignore
     n_layers = get_num_layers(model)
 
     # Define components to fetch
     layers_components = [(layer, "z"), (n_layers - 1, "layer_out")]
 
     # Get activations
-    spec_dict: SpecDict = {
-        "activations": {"positions": -1, "locations": layers_components}
-    }
+    spec_dict: SpecDict = {"activations": {"positions": -1, "locations": layers_components}}
     with UAP(model, inputs, spec_dict) as uap:
         activations, _ = uap.unified_access_and_patching()
 
@@ -141,7 +138,7 @@ def run_headwise_dla_for_layer(
     batch_size = head_inputs.shape[0]
     head_inputs = head_inputs.view(batch_size, num_heads, -1)
 
-    W_O = proj_weight.view(proj_weight.shape[0], num_heads, -1)  # type: ignore
+    W_O = proj_weight.view(proj_weight.shape[0], num_heads, -1)  # type: ignore # noqa: N806
 
     # Calculate the contribution of each head to the final output in the given direction.
     projections = einops.einsum(

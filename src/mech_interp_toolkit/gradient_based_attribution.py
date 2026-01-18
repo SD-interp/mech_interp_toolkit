@@ -7,7 +7,7 @@ from nnsight import NNsight
 from .activation_dict import ActivationDict
 from .activations import SpecDict
 from .activations import UnifiedAccessAndPatching as UAP
-from .utils import get_all_layer_components, get_num_layers, regularize_position
+from .utils import get_all_layer_components, regularize_position
 
 
 def _get_acts_and_grads(
@@ -73,9 +73,7 @@ def _interpolate_activations(
     """
     Interpolates between clean and corrupted inputs.
     """
-    interpolated_activations = (
-        1 - alpha
-    ) * clean_activations + alpha * baseline_activations
+    interpolated_activations = (1 - alpha) * clean_activations + alpha * baseline_activations
     return interpolated_activations
 
 
@@ -100,11 +98,7 @@ def edge_attribution_patching(
         position=position,
     )
 
-    eap_scores = (
-        ((clean_acts - corrupted_acts) * grads)
-        .apply(torch.sum, dim=-1)
-        .apply(torch.mean)
-    )
+    eap_scores = ((clean_acts - corrupted_acts) * grads).apply(torch.sum, dim=-1).apply(torch.mean)
     return eap_scores
 
 
@@ -165,9 +159,9 @@ def simple_integrated_gradients(
         else:
             accumulated_grads = accumulated_grads + (grads / steps)
 
-    integrated_grads = (
-        (input_embeddings - baseline_embeddings) * accumulated_grads
-    ).apply(torch.sum, dim=-1)
+    integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).apply(
+        torch.sum, dim=-1
+    )
     return integrated_grads
 
 
@@ -215,9 +209,7 @@ def eap_integrated_gradients(
     accumulated_grads = None
 
     for alpha in alphas:
-        interpolated_embeddings = _interpolate_activations(
-            embeddings, baseline_embeddings, alpha
-        )
+        interpolated_embeddings = _interpolate_activations(embeddings, baseline_embeddings, alpha)
 
         spec_dict = template_spec.copy()
         spec_dict["patching"] = interpolated_embeddings

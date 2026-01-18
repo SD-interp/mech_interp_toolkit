@@ -93,9 +93,7 @@ class ArithmeticOperation(FreezableDict):
                     result[key] = self[key] + other[key]
             return result
         else:
-            raise NotImplementedError(
-                "Addition only supported between ActivationDicts."
-            )
+            raise NotImplementedError("Addition only supported between ActivationDicts.")
 
     def __radd__(self, other) -> Self:
         return self.__add__(other)
@@ -109,9 +107,7 @@ class ArithmeticOperation(FreezableDict):
                     result[key] = self[key] - other[key]
             return result
         else:
-            raise NotImplementedError(
-                "Subtraction only supported between ActivationDicts."
-            )
+            raise NotImplementedError("Subtraction only supported between ActivationDicts.")
 
     def __mul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
@@ -189,7 +185,7 @@ class ActivationDict(ArithmeticOperation):
             "layer_out": 4,
         }
 
-        new_dict = ActivationDict(self.config, self.positions)
+        new_dict = type(self)(self.config, self.positions)
         keys = list(self.keys())
         keys = sorted(
             keys,
@@ -266,9 +262,7 @@ class ActivationDict(ArithmeticOperation):
         output.value_type = self.value_type
         output.attention_mask = self.attention_mask
         for layer, component in self.keys():
-            output[(layer, component)] = function(
-                self[(layer, component)], *args, **kwargs
-            )
+            output[(layer, component)] = function(self[(layer, component)], *args, **kwargs)
 
         return output
 

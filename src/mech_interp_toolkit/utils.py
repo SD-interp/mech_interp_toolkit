@@ -2,7 +2,7 @@ import json
 import random
 from collections.abc import MutableMapping, Sequence
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, cast
 
 import numpy as np
 import requests
@@ -75,9 +75,7 @@ def load_model_tokenizer_config(
     return model, tokenizer, config
 
 
-def get_prompts_from_url(
-    url: str, save_path: Union[str, Path] = "data/prompts.json"
-) -> None:
+def get_prompts_from_url(url: str, save_path: Union[str, Path] = "data/prompts.json") -> None:
     """
     Downloads prompts from a URL and saves them to a local file.
 
@@ -180,7 +178,9 @@ def get_logit_difference(
     return logits[:, tokA_id] - logits[:, tokB_id]
 
 
-def regularize_position(position: Union[int, slice, Sequence, None]) -> Union[list[int], slice, Sequence]:
+def regularize_position(
+    position: Union[int, slice, Sequence, None],
+) -> Union[list[int], slice, Sequence]:
     if isinstance(position, int):
         position = [position]
     elif position is None:
@@ -202,7 +202,6 @@ def get_num_layers(model: NNsight) -> int:
     Returns:
         The number of hidden layers.
     """
-    from typing import cast
     return cast(int, model.model.config.num_hidden_layers)  # type: ignore
 
 

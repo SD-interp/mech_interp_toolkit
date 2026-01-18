@@ -28,9 +28,7 @@ def get_attention_pattern(
         A dictionary mapping layer indices to attention patterns.
     """
     if model.model.config._attn_implementation != "eager":  # type: ignore
-        warnings.warn(
-            "Attention patterns may not be accurate for non-eager implementations."
-        )
+        warnings.warn("Attention patterns may not be accurate for non-eager implementations.")
     output = dict()
 
     if len(layers) != len(head_indices):
@@ -39,13 +37,13 @@ def get_attention_pattern(
     input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
 
     with torch.no_grad():
-        with model.trace(input_ids, attention_mask, position_ids) as trace:
+        with model.trace(input_ids, attention_mask, position_ids) as trace:  # noqa: F841
             for i, layer in enumerate(layers):
                 heads = list(head_indices[i])
                 output[layer] = (
-                    model.model.layers[layer]
-                    .self_attn.output[1][:, heads, query_position, :]
-                    .save()
+                    model.model.layers[layer]  # type: ignore
+                    .self_attn.output[1][:, heads, query_position, :]  # type: ignore
+                    .save()  # type: ignore
                 )
 
     return output
