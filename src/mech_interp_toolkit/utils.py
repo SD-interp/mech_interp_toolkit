@@ -1,20 +1,22 @@
+import json
+import random
+from collections.abc import MutableMapping, Sequence
+from pathlib import Path
+from typing import Optional, Tuple, Union
+
+import numpy as np
+import requests
+import torch
+from nnsight import Envoy, NNsight
+from torch.utils.data import DataLoader
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
-    AutoConfig,
     PretrainedConfig,
 )
-from typing import Tuple, Optional, Union
-from nnsight import NNsight, Envoy
+
 from .tokenizer import ChatTemplateTokenizer
-import torch
-from torch.utils.data import DataLoader
-import requests
-import json
-from pathlib import Path
-import random
-import numpy as np
-from collections.abc import MutableMapping, Sequence
 
 
 def set_global_seed(seed: int = 0) -> None:
@@ -54,7 +56,7 @@ def load_model_tokenizer_config(
         A tuple containing the NNsight-wrapped model, the chat tokenizer, and the model config.
     """
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = get_default_device()
 
     config = AutoConfig.from_pretrained(model_name)
     tokenizer = AutoTokenizer.from_pretrained(
@@ -88,9 +90,8 @@ def get_prompts_from_url(
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    assert "metadata" in data and ("questions" in data or "pairs" in data), (
-        "Incorrect schema in fetched data."
-    )
+    if "metadata" not in data or ("questions" not in data and "pairs" not in data):
+        raise ValueError("Incorrect schema in fetched data.")
 
     with save_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
@@ -147,7 +148,7 @@ def input_dict_to_tuple(
         A tuple of tensors (input_ids, attention_mask, position_ids).
     """
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = get_default_device()
 
     if isinstance(input_dict, MutableMapping):
         input_ids = input_dict["input_ids"].to(device)
@@ -179,7 +180,7 @@ def get_logit_difference(
     return logits[:, tokA_id] - logits[:, tokB_id]
 
 
-def regularize_position(position):
+def regularize_position(position: Union[int, slice, Sequence, None]) -> Union[list[int], slice, Sequence]:
     if isinstance(position, int):
         position = [position]
     elif position is None:
@@ -189,3 +190,41 @@ def regularize_position(position):
     else:
         raise ValueError("position must be int, slice, None or Sequence")
     return position
+
+
+def get_num_layers(model: NNsight) -> int:
+    """
+    Get the number of hidden layers in the model.
+
+    Args:
+        model: The NNsight model wrapper.
+
+    Returns:
+        The number of hidden layers.
+    """
+    from typing import cast
+    return cast(int, model.model.config.num_hidden_layers)  # type: ignore
+
+
+def get_all_layer_components(model: NNsight) -> list[tuple[int, str]]:
+    """
+    Get a list of all (layer, component) tuples for attention and MLP components.
+
+    Args:
+        model: The NNsight model wrapper.
+
+    Returns:
+        A list of tuples containing (layer_index, component_name) for all layers.
+    """
+    n_layers = get_num_layers(model)
+    return [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
+
+
+def get_default_device() -> str:
+    """
+    Get the default device (cuda if available, otherwise cpu).
+
+    Returns:
+        The device string ('cuda' or 'cpu').
+    """
+    return "cuda" if torch.cuda.is_available() else "cpu"

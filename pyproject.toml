@@ -1,25 +1,86 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm>=9.2.2"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mech-interp-toolkit"
-version = "0.0.3"
+dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "einops>=0.8.1",
-    "pytest>=9.0.2",
     "scikit-learn>=1.8.0",
+    "torch>=2.0.0",
     "transformers>=4.57.3",
     "nnsight>=0.1",
-    "twine>=6.2.0",
 ]
 authors = [
-  { name="Shantanu Darveshi", email="shantanu.darveshi@gmail.com" },
+  { name = "Shantanu Darveshi", email = "shantanu.darveshi@gmail.com" },
 ]
 description = "Mech. Interp. utility kit"
 
 [project.urls]
-"Repository" = "https://github.com/SD-interp/mech_interp_toolkit/tree/main"
+Repository = "https://github.com/SD-interp/mech_interp_toolkit/tree/main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 packages = ["mech_interp_toolkit"]
+
+[tool.setuptools_scm]
+# optional but recommended
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.8.0",
+    "ruff>=0.2.0",
+    "isort>=5.13.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=src --cov-report=term-missing"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+strict_equality = true
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "**/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]  # Line too long (handled by formatter)
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["mech_interp_toolkit"]

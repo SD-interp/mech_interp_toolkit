@@ -1,6 +1,7 @@
-from transformers import PreTrainedTokenizer
-import torch
 from typing import cast
+
+import torch
+from transformers import PreTrainedTokenizer
 
 class ChatTemplateTokenizer:
     """

@@ -1,8 +1,10 @@
-import torch
-from nnsight import NNsight
-from .utils import input_dict_to_tuple
 import warnings
 from collections.abc import Sequence
+
+import torch
+from nnsight import NNsight
+
+from .utils import input_dict_to_tuple
 
 
 def get_attention_pattern(
@@ -31,9 +33,8 @@ def get_attention_pattern(
         )
     output = dict()
 
-    assert len(layers) == len(head_indices), (
-        "each layer# provided must have corresponding head indices"
-    )
+    if len(layers) != len(head_indices):
+        raise ValueError("each layer# provided must have corresponding head indices")
 
     input_ids, attention_mask, position_ids = input_dict_to_tuple(inputs)
 

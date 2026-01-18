@@ -5,12 +5,8 @@ from typing import Any, NotRequired, TypedDict, cast
 import torch
 from nnsight import NNsight
 
-from .activation_dict import ActivationDict
+from .activation_dict import ActivationDict, LayerComponent, LayerHead, Position
 from .utils import input_dict_to_tuple, regularize_position
-
-type Position = slice | int | Sequence | None
-type LayerComponent = list[tuple[int, str]]
-type LayerHead = list[tuple[int, int]]
 
 
 class AccessGradients(TypedDict):
@@ -20,8 +16,8 @@ class AccessGradients(TypedDict):
 
 class AccessActivations(TypedDict):
     positions: Position
-    locations: LayerComponent
-    gradients: AccessGradients
+    locations: list[LayerComponent]
+    gradients: NotRequired[AccessGradients]
 
 
 class SpecDict(TypedDict):
@@ -33,9 +29,9 @@ class SpecDict(TypedDict):
 def create_z_patch_dict(
     original_acts: ActivationDict,
     new_acts: ActivationDict,
-    layer_head: LayerHead,
+    layer_head: list[LayerHead],
     position: Position = None,
-):
+) -> ActivationDict:
     """
     Creates a new ActivationDict for patching 'z' activations.
 
@@ -47,9 +43,8 @@ def create_z_patch_dict(
     Returns:
         A new ActivationDict with the patched activations.
     """
-    assert not (original_acts.fused_heads or new_acts.fused_heads), (
-        "Both ActivationDicts must have unfused heads for patching."
-    )
+    if original_acts.fused_heads or new_acts.fused_heads:
+        raise ValueError("Both ActivationDicts must have unfused heads for patching.")
 
     if isinstance(position, int):
         position = [position]
@@ -95,7 +90,9 @@ def create_z_patch_dict(
     return patch_dict
 
 
-def _locate_layer_component(model, trace, layer: int, component: str):
+def _locate_layer_component(
+    model: NNsight, trace: Any, layer: int, component: str
+) -> Any:
     if trace is None:
         raise ValueError("Active trace is required to locate layer components.")
 
@@ -141,22 +138,42 @@ class UnifiedAccessAndPatching:
             self.loop_components.update(temp)
 
         if self.acts_dict:
+            self.acts_dict["positions"] = regularize_position(
+                self.acts_dict["positions"]
+            )
             temp = [(x, None) for x in self.acts_dict["locations"]]
             self.loop_components.update(temp)
             self.output = ActivationDict(
                 model.model.config, self.acts_dict["positions"]
             )
-            self.capture_grads = "gradients" in self.acts_dict
+            self._capture_grads = bool(self.acts_dict.get("gradients"))
+
+            if self._capture_grads and self.acts_dict["positions"] != slice(None):
+                warnings.warn(
+                    """slicing and indexing when capturing gradients is not supported. 
+                    All positions will be captured by default. Use output.extract_positions() instead"""
+                )
+
         else:
-            self.capture_grads = False
+            self._capture_grads = False
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        pass
+        # clean-up references
+        del self.model
+        del self.input_ids
+        del self.attention_mask
+        del self.position_ids
+        del self.spec_dict
+        del self.loop_components
+        del self.patching_dict
+        del self.acts_dict
+        del self._capture_grads
+        del self.output
 
-    def warning_for_attn_type(self, loop_components):
+    def warning_for_attn_type(self, loop_components: ActivationDict) -> None:
         attn_implementation = self.model.model.config._attn_implementation  # type: ignore
         for _, component in loop_components:
             if component == "z":
@@ -166,15 +183,17 @@ class UnifiedAccessAndPatching:
                     )
 
     @staticmethod
-    def patch_fn(original, new_value, position):
+    def patch_fn(
+        original: torch.Tensor, new_value: torch.Tensor, position: Position
+    ) -> torch.Tensor:
         original = original.clone()
         original[:, position, :] = new_value
         return original
 
-    def unified_access_and_patching(self):
+    def unified_access_and_patching(self) -> tuple[Optional[ActivationDict], torch.Tensor]:
         self.warning_for_attn_type(self.loop_components)
 
-        context = torch.enable_grad if self.capture_grads else torch.no_grad
+        context = torch.enable_grad if self._capture_grads else torch.no_grad
 
         with (
             context(),
@@ -204,7 +223,7 @@ class UnifiedAccessAndPatching:
                     self.acts_dict is not None
                     and (layer, component) in self.acts_dict["locations"]
                 ):
-                    if self.capture_grads:
+                    if self._capture_grads:
                         self.output[(layer, component)] = comp.save()
                         self.output[(layer, component)].retain_grad()
                     else:
@@ -213,11 +232,9 @@ class UnifiedAccessAndPatching:
 
             logits = self.model.lm_head.output[:, [-1], :].save()  # type: ignore
 
-            if self.capture_grads:
-                assert self.acts_dict is not None
-
-                metric_fn = self.acts_dict["gradients"]["metric_fn"]
-                metric_layer, metric_component = self.acts_dict["gradients"][
+            if self._capture_grads:
+                metric_fn = self.acts_dict["gradients"]["metric_fn"]  # type: ignore
+                metric_layer, metric_component = self.acts_dict["gradients"][  # type: ignore
                     "compute_metric_at"
                 ]
 
@@ -231,5 +248,5 @@ class UnifiedAccessAndPatching:
         return self.output if hasattr(self, "output") else None, logits
 
     @staticmethod
-    def patch_fn_example(acts):
+    def metric_fn_example(acts: torch.Tensor) -> torch.Tensor:
         return acts[:, -1, :].sum()

@@ -1,9 +1,12 @@
+from collections.abc import Sequence
+
+import einops
 import torch
 from nnsight import NNsight
-from .utils import ChatTemplateTokenizer
-import einops
-from collections.abc import Sequence
-from .activations import get_activations
+
+from .activations import SpecDict
+from .activations import UnifiedAccessAndPatching as UAP
+from .utils import ChatTemplateTokenizer, get_all_layer_components, get_num_layers
 
 
 def get_pre_rms_logit_diff_direction(
@@ -22,13 +25,15 @@ def get_pre_rms_logit_diff_direction(
         The direction vector.
     """
     unembedding_matrix = model.get_output_embeddings().weight
-    gamma = model.model.norm.weight  # (d_model,)
+    gamma = model.model.norm.weight  # type: ignore (d_model,)
     token_ids = []
-    assert len(token_pair) == 2, "Provide exactly two target tokens."
+    if len(token_pair) != 2:
+        raise ValueError("Provide exactly two target tokens.")
 
     for token in token_pair:
         encoding = tokenizer.tokenizer.encode(token, add_special_tokens=False)
-        assert len(encoding) == 1, f"Token '{token}' is tokenized into multiple tokens."
+        if len(encoding) != 1:
+            raise ValueError(f"Token '{token}' is tokenized into multiple tokens.")
         token_ids.append(encoding[0])
 
     post_rms_logit_diff_direction = (
@@ -57,16 +62,22 @@ def run_componentwise_dla(
         A dictionary containing the DLA results for attention and MLP layers.
     """
 
-    n_layers = model.model.config.num_hidden_layers
+    n_layers = get_num_layers(model)
     device = pre_rms_direction.device
 
     # Prepare components to fetch
-    layers_components = [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
-
+    layers_components = get_all_layer_components(model)
     layers_components.append((n_layers - 1, "layer_out"))
 
     # Get activations
-    activations, _, _ = get_activations(model, inputs, layers_components, position=-1)
+    spec_dict: SpecDict = {
+        "activations": {"positions": -1, "locations": layers_components}
+    }
+    with UAP(model, inputs, spec_dict) as uap:
+        activations, _ = uap.unified_access_and_patching()
+
+    if activations is None:
+        raise RuntimeError("Failed to retrieve activations from the model.")
 
     # Calculate divisor
     final_layer_output = activations[(n_layers - 1, "layer_out")].squeeze(1).to(device)
@@ -103,19 +114,25 @@ def run_headwise_dla_for_layer(
     Returns:
         A tensor containing the DLA results for each head.
     """
-    proj_weight = model.model.layers[layer].self_attn.o_proj.weight
-    num_heads = model.model.config.num_attention_heads
-    n_layers = model.model.config.num_hidden_layers
-    device = proj_weight.device  # Get device from model parameter
+    proj_weight = model.model.layers[layer].self_attn.o_proj.weight  # type: ignore
+    num_heads = model.model.config.num_attention_heads  # type: ignore
+    n_layers = get_num_layers(model)
 
     # Define components to fetch
     layers_components = [(layer, "z"), (n_layers - 1, "layer_out")]
 
     # Get activations
-    activations, _, _ = get_activations(model, inputs, layers_components, position=-1)
+    spec_dict: SpecDict = {
+        "activations": {"positions": -1, "locations": layers_components}
+    }
+    with UAP(model, inputs, spec_dict) as uap:
+        activations, _ = uap.unified_access_and_patching()
 
-    head_inputs = activations[(layer, "z")].squeeze(1).to(device)
-    final_layer_output = activations[(n_layers - 1, "layer_out")].squeeze(1).to(device)
+    if activations is None:
+        raise RuntimeError("Failed to retrieve activations from the model.")
+
+    head_inputs = activations[(layer, "z")].squeeze(1)
+    final_layer_output = activations[(n_layers - 1, "layer_out")].squeeze(1)
 
     rms_final = final_layer_output.norm(dim=-1, keepdim=True)
 
@@ -124,7 +141,7 @@ def run_headwise_dla_for_layer(
     batch_size = head_inputs.shape[0]
     head_inputs = head_inputs.view(batch_size, num_heads, -1)
 
-    W_O = proj_weight.view(proj_weight.shape[0], num_heads, -1)
+    W_O = proj_weight.view(proj_weight.shape[0], num_heads, -1)  # type: ignore
 
     # Calculate the contribution of each head to the final output in the given direction.
     projections = einops.einsum(

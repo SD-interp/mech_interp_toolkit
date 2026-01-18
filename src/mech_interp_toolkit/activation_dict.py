@@ -1,8 +1,15 @@
-import torch
-import einops
-from typing import Callable, Literal, Self
-from abc import ABC
 import warnings
+from abc import ABC
+from collections.abc import Sequence
+from copy import deepcopy
+from typing import Callable, Literal, Optional, Self
+
+import einops
+import torch
+
+type Position = slice | int | Sequence | None
+type LayerComponent = tuple[int, str]
+type LayerHead = tuple[int, int]
 
 
 class FrozenError(RuntimeError):
@@ -11,26 +18,24 @@ class FrozenError(RuntimeError):
     pass
 
 
-class FreezableDict(ABC, dict):
+class FreezableDict(ABC, dict[LayerComponent, torch.Tensor]):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._frozen = False
 
-    def freeze(self):
+    def freeze(self) -> Self:
         """Freeze the dictionary, making it immutable."""
         self._frozen = True
         return self
 
-    def unfreeze(self):
+    def unfreeze(self) -> Self:
         """Unfreeze the dictionary, making it mutable."""
         self._frozen = False
         return self
 
     def _check_frozen(self):
         if getattr(self, "_frozen", False):
-            raise FrozenError(
-                "This object is frozen and cannot be modified."
-            )
+            raise FrozenError("This object is frozen and cannot be modified.")
 
     def __setitem__(self, key, value):
         self._check_frozen()
@@ -40,25 +45,28 @@ class FreezableDict(ABC, dict):
         self._check_frozen()
         return super().__delitem__(key)
 
-    def clear(self):
+    def clear(self) -> None:
         self._check_frozen()
         return super().clear()
 
-    def pop(self, *args):
+    def pop(self, *args) -> torch.Tensor:
         self._check_frozen()
         return super().pop(*args)
 
-    def popitem(self):
+    def popitem(self) -> tuple[LayerComponent, torch.Tensor]:
         self._check_frozen()
         return super().popitem()
 
-    def setdefault(self, *args):
+    def setdefault(self, *args) -> torch.Tensor:
         self._check_frozen()
         return super().setdefault(*args)
 
-    def update(self, *args, **kwargs):
+    def update(self, *args, **kwargs) -> None:
         self._check_frozen()
         return super().update(*args, **kwargs)
+
+    def clone(self) -> Self:
+        return deepcopy(self)
 
 
 class ArithmeticOperation(FreezableDict):
@@ -67,13 +75,14 @@ class ArithmeticOperation(FreezableDict):
         self.config = config
         self.positions = positions
 
-    def check_compatibility(self, other):
+    def check_compatibility(self, other) -> None:
         if not isinstance(other, ActivationDict):
             raise ValueError("Operand must be an instance of ActivationDict.")
 
         if self.keys() != other.keys():
             warnings.warn(
-                "ActivationDicts have different keys; only matching keys will be processed.")
+                "ActivationDicts have different keys; only matching keys will be processed."
+            )
 
     def __add__(self, other) -> Self:
         self.check_compatibility(other)
@@ -87,10 +96,10 @@ class ArithmeticOperation(FreezableDict):
             raise NotImplementedError(
                 "Addition only supported between ActivationDicts."
             )
-    
+
     def __radd__(self, other) -> Self:
         return self.__add__(other)
-    
+
     def __sub__(self, other) -> Self:
         self.check_compatibility(other)
         if isinstance(other, ActivationDict):
@@ -118,9 +127,7 @@ class ArithmeticOperation(FreezableDict):
                 result[key] = self[key] * other
             return result
         else:
-            raise NotImplementedError(
-                "Multiplication not supported for this type."
-            )
+            raise NotImplementedError("Multiplication not supported for this type.")
 
     def __rmul__(self, other) -> Self:
         return self.__mul__(other)
@@ -139,9 +146,7 @@ class ArithmeticOperation(FreezableDict):
                 result[key] = self[key] / other
             return result
         else:
-            raise NotImplementedError(
-                "Division not supported for this type."
-            )
+            raise NotImplementedError("Division not supported for this type.")
 
 
 class ActivationDict(ArithmeticOperation):
@@ -175,7 +180,7 @@ class ActivationDict(ArithmeticOperation):
         self.value_type = value_type  # e.g., 'activation' or 'gradient' or 'scores'
         self.attention_mask = torch.tensor([])  # Placeholder for attention mask
 
-    def reorganize(self):
+    def reorganize(self) -> Self:
         execution_order = {
             "layer_in": 0,
             "z": 1,
@@ -195,7 +200,7 @@ class ActivationDict(ArithmeticOperation):
             new_dict[key] = self[key]
         return new_dict
 
-    def split_heads(self):
+    def split_heads(self) -> Self:
         """
         Splits the 'z' activations into individual heads.
         Assumes 'z' activations are stored with fused heads.
@@ -224,7 +229,7 @@ class ActivationDict(ArithmeticOperation):
         self._frozen = pre_state
         return self
 
-    def merge_heads(self):
+    def merge_heads(self) -> Self:
         """
         Merges the 'z' activations from individual heads back into a single tensor.
         """
@@ -254,30 +259,32 @@ class ActivationDict(ArithmeticOperation):
     def apply(
         self,
         function: Callable[[torch.Tensor], torch.Tensor],
-        *args, **kwargs,
+        *args,
+        **kwargs,
     ) -> Self:
         output = type(self)(self.config, self.positions)
         output.value_type = self.value_type
         output.attention_mask = self.attention_mask
         for layer, component in self.keys():
             output[(layer, component)] = function(
-                self[(layer, component)], *args, **kwargs)
-    
+                self[(layer, component)], *args, **kwargs
+            )
+
         return output
 
-    def cuda(self):
+    def cuda(self) -> Self:
         """Moves all activation tensors to the GPU."""
         for key in self.keys():
             self[key] = self[key].cuda()
         return self
 
-    def cpu(self):
+    def cpu(self) -> Self:
         """Moves all activation tensors to the CPU."""
         for key in self.keys():
             self[key] = self[key].cpu()
         return self
 
-    def zeros_like(self, keys: list[tuple[int, str]]) -> Self:
+    def zeros_like(self, keys: Optional[list[LayerComponent]] = None) -> Self:
         """
         Creates a new ActivationDict with zero tensors for the specified keys,
         matching the shapes of the original tensors.
@@ -286,9 +293,46 @@ class ActivationDict(ArithmeticOperation):
         new_obj.value_type = self.value_type
         new_obj.attention_mask = self.attention_mask
 
+        if keys is None:
+            keys = list(self.keys())
+
         for key in keys:
             if key in self:
                 new_obj[key] = torch.zeros_like(self[key])
+            else:
+                warnings.warn(f"Key {key} not found in ActivationDict. Skipping.")
+
+        return new_obj
+
+    def extract_positions(self, keys: Optional[list[LayerComponent]] = None) -> Self:
+        new_obj = type(self)(self.config, self.positions)
+        new_obj.value_type = self.value_type
+        new_obj.attention_mask = self.attention_mask
+
+        if keys is None:
+            keys = list(self.keys())
+
+        for key in keys:
+            if key in self:
+                new_obj[key] = self[key][:, self.positions, :]
+                if self[key].grad is not None:
+                    new_obj[key].grad = self[key].grad[:, self.positions, :]  # type: ignore
+            else:
+                warnings.warn(f"Key {key} not found in ActivationDict. Skipping.")
+
+        return new_obj
+
+    def get_grads(self, keys: Optional[list[LayerComponent]] = None) -> Self:
+        new_obj = type(self)(self.config, self.positions)
+        new_obj.value_type = "gradient"
+        new_obj.attention_mask = self.attention_mask
+
+        if keys is None:
+            keys = list(self.keys())
+
+        for key in keys:
+            if key in self:
+                new_obj[key] = self[key].grad
             else:
                 warnings.warn(f"Key {key} not found in ActivationDict. Skipping.")
 

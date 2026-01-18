@@ -1,10 +1,12 @@
-import torch
-from .activations import ActivationDict
+from typing import Literal, Optional
+
 import numpy as np
-from sklearn.linear_model import LogisticRegression, LinearRegression
-from typing import Optional, Literal
-from sklearn.metrics import root_mean_squared_error, accuracy_score
+import torch
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.metrics import accuracy_score, root_mean_squared_error
 from sklearn.model_selection import train_test_split
+
+from .activations import ActivationDict
 
 
 class LinearProbe:
@@ -91,7 +93,7 @@ class LinearProbe:
 
         return X_train, X_test, y_train, y_test
 
-    def display_metrics(self, pred: np.ndarray, y: np.ndarray, label: str):
+    def display_metrics(self, pred: np.ndarray, y: np.ndarray, label: str) -> None:
         if self.target_type == "classification":
             metric_name = "Accuracy"
             metric = accuracy_score(y, pred)
@@ -101,7 +103,7 @@ class LinearProbe:
 
         print(f"{label} {metric_name}: {metric:.4f}")
 
-    def fit(self, activations: ActivationDict, target: torch.Tensor | np.ndarray):
+    def fit(self, activations: ActivationDict, target: torch.Tensor | np.ndarray) -> "LinearProbe":
         X_train, X_test, y_train, y_test = self.prepare_data(activations, target)
 
         if y_test is None or y_train is None:
