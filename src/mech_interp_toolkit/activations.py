@@ -209,6 +209,7 @@ class UnifiedAccessAndPatching:
                 if self.acts_dict is not None and (layer, component) in self.acts_dict["locations"]:
                     if self._capture_grads:
                         self.output[(layer, component)] = comp.save()
+                        self.output[(layer, component)].requires_grad_()
                         self.output[(layer, component)].retain_grad()
                     else:
                         cache_pos = self.acts_dict["positions"]
