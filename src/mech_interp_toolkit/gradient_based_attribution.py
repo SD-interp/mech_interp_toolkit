@@ -1,3 +1,4 @@
+import copy
 from collections.abc import Callable, Sequence
 from typing import Literal, Optional
 
@@ -6,7 +7,7 @@ from nnsight import NNsight
 
 from .activation_dict import ActivationDict
 from .activations import SpecDict
-from .activations import UnifiedAccessAndPatching as UAP
+from .activations import UnifiedAccessAndPatching as UAP  # noqa: N814
 from .utils import get_all_layer_components, regularize_position
 
 
@@ -68,7 +69,6 @@ def _interpolate_activations(
     clean_activations: ActivationDict,
     baseline_activations: ActivationDict,
     alpha: float | torch.Tensor,
-    key: tuple[int, str] = (0, "layer_in"),
 ) -> ActivationDict:
     """
     Interpolates between clean and corrupted inputs.
@@ -128,7 +128,7 @@ def simple_integrated_gradients(
             raise RuntimeError("Failed to retrieve input embeddings.")
 
     device = input_embeddings[embedding_key].device
-    alphas = torch.linspace(0, 1, steps).to(device)
+    alphas = torch.linspace(0, 1, steps + 1)[1:].to(device)
     accumulated_grads = None
 
     for alpha in alphas:
@@ -172,7 +172,7 @@ def eap_integrated_gradients(
     layer_components: list[tuple[int, str]] | None = None,
     metric_fn: Callable = torch.mean,
     position: slice | int | Sequence | None = -1,
-    steps: int = 5,
+    intermediate_points: int = 5,
 ) -> ActivationDict:
     """
     Computes integrated gradients for edge attributions.
@@ -205,13 +205,13 @@ def eap_integrated_gradients(
             raise RuntimeError("Failed to retrieve embeddings.")
 
     device = list(embeddings.values())[0].device if embeddings else torch.device("cpu")
-    alphas = torch.linspace(0, 1, steps).to(device)
+    alphas = torch.linspace(0, 1, intermediate_points + 1)[1:].to(device)
     accumulated_grads = None
 
     for alpha in alphas:
         interpolated_embeddings = _interpolate_activations(embeddings, baseline_embeddings, alpha)
 
-        spec_dict = template_spec.copy()
+        spec_dict = copy.deepcopy(template_spec)
         spec_dict["patching"] = interpolated_embeddings
 
         with UAP(model, inputs, spec_dict) as uap:
@@ -221,9 +221,9 @@ def eap_integrated_gradients(
             grads = acts.get_grads()
 
         if accumulated_grads is None:
-            accumulated_grads = grads / steps
+            accumulated_grads = grads / intermediate_points
         else:
-            accumulated_grads = accumulated_grads + (grads / steps)
+            accumulated_grads = accumulated_grads + (grads / intermediate_points)
 
     integrated_grads = ((embeddings - baseline_embeddings) * accumulated_grads).apply(
         torch.sum, dim=-1
