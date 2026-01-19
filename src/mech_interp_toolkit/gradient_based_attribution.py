@@ -72,7 +72,9 @@ def simple_integrated_gradients(
     """
 
     if not torch.is_grad_enabled():
-        raise RuntimeError("Integrated Gradients requires gradient computation. Run with torch.enable_grad()")
+        raise RuntimeError(
+            "Integrated Gradients requires gradient computation. Run with torch.enable_grad()"
+        )
 
     input_embeddings = get_embeddings(model, inputs)[(0, "layer_in")]
 
@@ -99,9 +101,11 @@ def simple_integrated_gradients(
     accumulated_grads = torch.zeros_like(input_embeddings)
 
     for alpha in alphas:
-        interpolated_embeddings = _interpolate_activations(
-            baseline_embeddings, input_embeddings, alpha
-        ).detach().requires_grad_(True)
+        interpolated_embeddings = (
+            _interpolate_activations(baseline_embeddings, input_embeddings, alpha)
+            .detach()
+            .requires_grad_(True)
+        )
 
         with model.trace() as tracer:
             with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
@@ -180,6 +184,9 @@ def eap_integrated_gradients(
     by Hanna et al., 2024. https://arxiv.org/pdf/2403.17806
     """
 
+    if not torch.is_grad_enabled():
+        raise RuntimeError("EAP-IG requires gradient computation. Run with torch.enable_grad()")
+
     layer_components = get_all_layer_components(model)
 
     clean_activations = get_activations(model, clean_dict, layer_components + [(0, "layer_in")])
@@ -190,13 +197,29 @@ def eap_integrated_gradients(
     clean_embeddings = clean_activations[(0, "layer_in")]
     corrupted_embeddings = corrupted_activations[(0, "layer_in")]
 
+    if clean_embeddings.shape != corrupted_embeddings.shape:
+        raise ValueError(
+            f"Clean and corrupted embeddings must have identical shape. "
+            f"Got clean: {clean_embeddings.shape}, corrupted: {corrupted_embeddings.shape}"
+        )
+    if clean_embeddings.device != corrupted_embeddings.device:
+        raise ValueError(
+            f"Clean and corrupted embeddings must be on the same device. "
+            f"Got clean: {clean_embeddings.device}, corrupted: {corrupted_embeddings.device}"
+        )
+    if clean_embeddings.dtype != corrupted_embeddings.dtype:
+        raise ValueError(
+            f"Clean and corrupted embeddings must have the same dtype. "
+            f"Got clean: {clean_embeddings.dtype}, corrupted: {corrupted_embeddings.dtype}"
+        )
+
     clean_embeddings.grad = None
     corrupted_embeddings.grad = None
 
     alphas = torch.linspace(0, 1, intermediate_points + 1)[1:]
 
     synthetic_input_dict = clean_dict.copy()
-    synthetic_input_dict.pop("input_ids")
+    synthetic_input_dict.pop("input_ids", None)
     grad_accumulator = clean_activations.zeros_like(layer_components)
 
     for alpha in alphas:
@@ -213,6 +236,7 @@ def eap_integrated_gradients(
             with tracer.invoke(**synthetic_input_dict):
                 for layer_component in layer_components:
                     comp = _locate_layer_component(model, layer_component).save()
+                    comp.requires_grad_()
                     comp.retain_grad()
                     dummy_activation_cache[layer_component] = comp
                 logits = model.lm_head.output[:, -1, :].save()  # type: ignore
@@ -226,9 +250,7 @@ def eap_integrated_gradients(
         gc.collect()
         torch.cuda.empty_cache()
 
-    eap_scores = ((clean_activations - corrupted_activations) * grad_accumulator).apply(
-        torch.sum, dim=-1
-    )
+    eap_scores = ((clean_activations - corrupted_activations) * grad_accumulator).apply(torch.sum, dim=-1)
     return eap_scores
 
 
