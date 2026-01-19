@@ -189,9 +189,9 @@ def eap_integrated_gradients(
 
     layer_components = get_all_layer_components(model)
 
-    clean_activations = get_activations(model, clean_dict, layer_components + [(0, "layer_in")])
+    clean_activations = get_activations(model, clean_dict, [(0, "layer_in")] + layer_components)
     corrupted_activations = get_activations(
-        model, corrupted_dict, layer_components + [(0, "layer_in")]
+        model, corrupted_dict, [(0, "layer_in")] + layer_components
     )
 
     clean_embeddings = clean_activations[(0, "layer_in")]
@@ -250,7 +250,9 @@ def eap_integrated_gradients(
         gc.collect()
         torch.cuda.empty_cache()
 
-    eap_scores = ((clean_activations - corrupted_activations) * grad_accumulator).apply(torch.sum, dim=-1)
+    eap_scores = ((clean_activations - corrupted_activations) * grad_accumulator).apply(
+        torch.sum, dim=-1
+    )
     return eap_scores
 
 
