@@ -6,8 +6,6 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import accuracy_score, root_mean_squared_error
 from sklearn.model_selection import train_test_split
 
-from .activations import ActivationDict
-
 
 class LinearProbe:
     def __init__(

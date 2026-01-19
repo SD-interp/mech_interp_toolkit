@@ -5,8 +5,6 @@ import einops
 import torch
 from nnsight import NNsight
 
-from .activations import SpecDict
-from .activations import UnifiedAccessAndPatching as UAP  # noqa: N814
 from .utils import ChatTemplateTokenizer, get_all_layer_components, get_num_layers
 
 
