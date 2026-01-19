@@ -223,11 +223,11 @@ def eap_integrated_gradients(
     grad_accumulator = clean_activations.zeros_like(layer_components)
 
     for alpha in alphas:
-        interpolated_embeddings = _interpolate_activations(
-            clean_embeddings, corrupted_embeddings, alpha
+        interpolated_embeddings = (
+            _interpolate_activations(clean_embeddings, corrupted_embeddings, alpha)
+            .detach()
+            .requires_grad_(True)
         )
-
-        interpolated_embeddings.requires_grad_()
         synthetic_input_dict["inputs_embeds"] = interpolated_embeddings
 
         dummy_activation_cache = ActivationDict(model.model.config, slice(None))
