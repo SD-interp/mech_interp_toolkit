@@ -72,29 +72,51 @@ def simple_integrated_gradients(
     """
 
     if not torch.is_grad_enabled():
-        raise RuntimeError("EAP requires gradient computation., Run with torch.enable_grad()")
+        raise RuntimeError("Integrated Gradients requires gradient computation. Run with torch.enable_grad()")
 
     input_embeddings = get_embeddings(model, inputs)[(0, "layer_in")]
+
+    if baseline_embeddings.shape != input_embeddings.shape:
+        raise ValueError(
+            f"Baseline and input embeddings must have identical shape. "
+            f"Got baseline: {baseline_embeddings.shape}, input: {input_embeddings.shape}"
+        )
+    if baseline_embeddings.device != input_embeddings.device:
+        raise ValueError(
+            f"Baseline and input embeddings must be on the same device. "
+            f"Got baseline: {baseline_embeddings.device}, input: {input_embeddings.device}"
+        )
+    if baseline_embeddings.dtype != input_embeddings.dtype:
+        raise ValueError(
+            f"Baseline and input embeddings must have the same dtype. "
+            f"Got baseline: {baseline_embeddings.dtype}, input: {input_embeddings.dtype}"
+        )
+
+    synthetic_inputs = inputs.copy()
+    synthetic_inputs.pop("input_ids", None)
 
     alphas = torch.linspace(0, 1, steps + 1)[1:]
     accumulated_grads = torch.zeros_like(input_embeddings)
 
     for alpha in alphas:
         interpolated_embeddings = _interpolate_activations(
-            input_embeddings, baseline_embeddings, alpha
-        )
-        interpolated_embeddings.requires_grad_()
-        interpolated_embeddings.retain_grad()
+            baseline_embeddings, input_embeddings, alpha
+        ).detach().requires_grad_(True)
 
         with model.trace() as tracer:
-            with tracer.invoke(**inputs, inputs_embeds=interpolated_embeddings):
+            with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
                 logits = model.lm_head.output[:, [-1], :].save()  # type: ignore
                 metric = metric_fn(logits)
+                if metric.ndim != 0:
+                    metric = metric.sum()
                 metric.backward()
 
         if interpolated_embeddings.grad is None:
             raise RuntimeError("Failed to retrieve gradients.")
         accumulated_grads = accumulated_grads + (interpolated_embeddings.grad / steps)
+
+        gc.collect()
+        torch.cuda.empty_cache()
 
     integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1)
     return integrated_grads
@@ -111,22 +133,28 @@ def edge_attribution_patching(
     Computes edge attributions for attention heads using simple gradient x activation.
     """
 
+    if not torch.is_grad_enabled():
+        raise RuntimeError("EAP requires gradient computation. Run with torch.enable_grad()")
+
     layer_components = get_all_layer_components(model)
 
+    # Determine which inputs to use for gradient computation
     if compute_grad_at == "clean":
-        temp = clean_inputs
-        clean_inputs = corrupted_inputs
-        corrupted_inputs = temp
+        grad_inputs = clean_inputs
+    else:
+        grad_inputs = corrupted_inputs
 
-    clean_acts = get_embeddings(model, clean_inputs)
-    corrupted_acts = get_embeddings(model, corrupted_inputs)
+    # Get activations for ALL layer components, not just embeddings
+    clean_activations = get_activations(model, clean_inputs, layer_components)
+    corrupted_activations = get_activations(model, corrupted_inputs, layer_components)
 
-    activation_cache = ActivationDict(model.model.config, -1)
+    activation_cache = ActivationDict(model.model.config, slice(None))
 
     with model.trace() as tracer:
-        with tracer.invoke(**corrupted_inputs):
+        with tracer.invoke(**grad_inputs):
             for layer_component in layer_components:
                 comp = _locate_layer_component(model, layer_component).save()
+                comp.requires_grad_()
                 comp.retain_grad()
                 activation_cache[layer_component] = comp
             logits = model.lm_head.output[:, -1, :].save()  # type: ignore
@@ -135,7 +163,7 @@ def edge_attribution_patching(
 
     grads = activation_cache.get_grads()
 
-    eap_scores = ((clean_acts - corrupted_acts) * grads).apply(torch.sum, dim=-1)
+    eap_scores = ((clean_activations - corrupted_activations) * grads).apply(torch.sum, dim=-1)
     return eap_scores
 
 
