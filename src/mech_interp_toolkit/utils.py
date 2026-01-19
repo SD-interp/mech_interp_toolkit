@@ -65,7 +65,7 @@ def load_model_tokenizer_config(
         config.output_attentions = True
 
     model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
-    model.eval().to(device)
+    model.eval().to(device)  # type: ignore
     model = NNsight(model)
 
     return model, tokenizer, config
