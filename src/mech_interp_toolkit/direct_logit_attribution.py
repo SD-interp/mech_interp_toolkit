@@ -78,19 +78,15 @@ def run_componentwise_dla(
                     :, [-1], :
                 ].save()  # type: ignore
 
-    # Calculate divisor
+    # Calculate divisor (RMS normalization factor)
     final_layer_output = output[(n_layers - 1, "layer_out")].squeeze(1)
-    rms_final = final_layer_output.norm(dim=-1, keepdim=True)
-    divisor = torch.sqrt(rms_final**2 + eps).squeeze()
+    divisor = torch.sqrt(torch.mean(final_layer_output**2, dim=-1, keepdim=True) + eps)
 
     output.pop((n_layers - 1, "layer_out"))
 
     # Calculate DLA
     for layer_component, activation in output.items():
-        _, component = layer_component
-        if component == "layer_out":
-            continue
-        output[layer_component] = (activation.squeeze(1) @ pre_rms_direction) / divisor
+        output[layer_component] = (activation.squeeze(1) @ pre_rms_direction) / divisor.squeeze(1)
     output.value_type = "dla_scores"
     return output
 
@@ -111,7 +107,7 @@ def run_headwise_dla_for_layer(
         layer: The layer index.
         eps: A small value to prevent division by zero.
     Returns:
-        A tensor containing the DLA results for each head.
+        An ActivationDict containing the DLA results for each head.
     """
     proj_weight = model.model.layers[layer].self_attn.o_proj.weight  # type: ignore
     num_heads = cast(int, model.model.config.num_attention_heads)  # type: ignore
@@ -132,14 +128,9 @@ def run_headwise_dla_for_layer(
     head_inputs = output.split_heads()[(layer, "z")].squeeze(1)
 
     final_layer_output = output[(n_layers - 1, "layer_out")].squeeze(1)
-    rms_final = final_layer_output.norm(dim=-1, keepdim=True)
-
-    divisor = torch.sqrt(rms_final**2 + eps)
+    divisor = torch.sqrt(torch.mean(final_layer_output**2, dim=-1, keepdim=True) + eps)
 
     output.pop((n_layers - 1, "layer_out"))
-
-    batch_size = head_inputs.shape[0]
-    head_inputs = head_inputs.view(batch_size, num_heads, -1)
 
     W_O = proj_weight.view(proj_weight.shape[0], num_heads, -1)  # type: ignore # noqa: N806
 
