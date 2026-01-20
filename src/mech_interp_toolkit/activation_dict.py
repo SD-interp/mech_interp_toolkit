@@ -168,7 +168,7 @@ class ActivationDict(ArithmeticOperation):
         self.config = config
         self.num_heads = config.num_attention_heads
         self.num_layers = config.num_hidden_layers
-        self.head_dim = config.hidden_size // config.num_attention_heads
+        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
         self.model_dim = config.hidden_size
         self.num_kv_heads = getattr(config, "num_key_value_heads", self.num_heads)
         self.fused_heads = True
