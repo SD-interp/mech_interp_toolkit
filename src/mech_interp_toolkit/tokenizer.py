@@ -22,7 +22,7 @@ class ChatTemplateTokenizer:
         self,
         tokenizer: PreTrainedTokenizer,
         suffix: str = "",
-        system_prompt: str = "You are a strategic planning assistant that follows user instructions carefully",
+        system_prompt: str = "",
     ):
         self.tokenizer = tokenizer
         if self.tokenizer.pad_token is None:

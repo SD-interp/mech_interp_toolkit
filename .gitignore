@@ -11,3 +11,6 @@ wheels/
 .vscode
 .VSCodeCounter
 scratch_pad.ipynb
+
+# data
+data/

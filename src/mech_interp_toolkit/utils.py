@@ -37,6 +37,7 @@ def load_model_tokenizer_config(
     padding_side: str = "left",
     attn_type: str = "sdpa",
     suffix: str = "",
+    system_prompt: str = "",
 ) -> Tuple[Envoy, ChatTemplateTokenizer, PretrainedConfig]:
     """
     Load a Hugging Face model, tokenizer, and config by name.
@@ -55,10 +56,8 @@ def load_model_tokenizer_config(
         device = get_default_device()
 
     config = AutoConfig.from_pretrained(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name, use_fast=True, padding_side=padding_side, suffix=suffix
-    )
-    tokenizer = ChatTemplateTokenizer(tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, padding_side=padding_side)
+    tokenizer = ChatTemplateTokenizer(tokenizer, suffix=suffix, system_prompt=system_prompt)
     config._attn_implementation = attn_type
     if attn_type == "eager":
         config.return_dict_in_generate = True
