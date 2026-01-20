@@ -239,7 +239,7 @@ def eap_integrated_gradients(
                     comp.requires_grad_()
                     comp.retain_grad()
                     dummy_activation_cache[layer_component] = comp
-                logits = model.lm_head.output[:, -1, :].save()  # type: ignore
+                logits = model.lm_head.output.save()  # type: ignore
                 metric = metric_fn(logits)
                 metric.backward()
 
