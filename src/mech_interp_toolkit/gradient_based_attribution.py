@@ -1,61 +1,18 @@
 import gc
 from collections.abc import Callable
-from typing import Any, Literal, cast
+from typing import Literal
 
 import torch
 from nnsight import NNsight
 
-from .activation_dict import ActivationDict, LayerComponent
+from .activation_dict import ActivationDict
+from .activation_utils import (
+    get_activations,
+    get_embeddings,
+    interpolate_activations,
+    locate_layer_component,
+)
 from .utils import get_all_layer_components
-
-
-def get_activations(
-    model: NNsight, inputs: dict[str, torch.Tensor], layer_components: list[LayerComponent]
-) -> ActivationDict:
-    output = ActivationDict(model.model.config, slice(None))
-    with model.trace() as tracer:
-        with tracer.invoke(**inputs):
-            for layer_component in layer_components:
-                output[layer_component] = _locate_layer_component(model, layer_component).save()  # type: ignore
-                output[layer_component].requires_grad_()
-                output[layer_component].retain_grad()
-            tracer.stop()
-    return output
-
-
-def get_embeddings(model: NNsight, inputs: dict[str, torch.Tensor]):
-    return get_activations(model, inputs, [(0, "layer_in")])
-
-
-def _interpolate_activations(
-    clean_activations: torch.Tensor,
-    baseline_activations: torch.Tensor,
-    alpha: float | torch.Tensor,
-) -> torch.Tensor:
-    """
-    Interpolates between clean and corrupted inputs.
-    """
-    interpolated_activations = (1 - alpha) * clean_activations + alpha * baseline_activations
-    return interpolated_activations
-
-
-def _locate_layer_component(model: NNsight, layer_component: LayerComponent) -> Any:
-    layer, component = layer_component
-
-    layers = cast(Any, model.model.layers)
-    if component == "attn":
-        comp = layers[layer].self_attn.output[0]
-    elif component == "mlp":
-        comp = layers[layer].mlp.output
-    elif component == "z":
-        comp = layers[layer].self_attn.o_proj.input
-    elif component == "layer_in":
-        comp = layers[layer].input
-    elif component == "layer_out":
-        comp = layers[layer].output
-    else:
-        raise ValueError("component must be one of {'attn', 'mlp', 'z', 'layer_in', 'layer_out'}")
-    return comp
 
 
 def simple_integrated_gradients(
@@ -64,7 +21,7 @@ def simple_integrated_gradients(
     baseline_embeddings: torch.Tensor,
     metric_fn: Callable = torch.mean,
     steps: int = 50,
-) -> torch.Tensor:
+) -> ActivationDict:
     """
     Computes vanilla integrated w.r.t. input embeddings.
     Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
@@ -102,14 +59,14 @@ def simple_integrated_gradients(
 
     for alpha in alphas:
         interpolated_embeddings = (
-            _interpolate_activations(baseline_embeddings, input_embeddings, alpha)
+            interpolate_activations(baseline_embeddings, input_embeddings, alpha)
             .detach()
             .requires_grad_(True)
         )
 
         with model.trace() as tracer:
             with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
-                logits = model.lm_head.output[:, [-1], :].save()  # type: ignore
+                logits = model.lm_head.output.save()  # type: ignore
                 metric = metric_fn(logits)
                 if metric.ndim != 0:
                     metric = metric.sum()
@@ -122,8 +79,13 @@ def simple_integrated_gradients(
         gc.collect()
         torch.cuda.empty_cache()
 
-    integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1)
-    return integrated_grads
+    integrated_grads = (
+        ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1).mean()
+    )
+    output = ActivationDict(model.model.config, slice(None))
+    output[(0, "layer_in")] = integrated_grads
+    output.value_type = "integrated_grads"
+    return output
 
 
 def edge_attribution_patching(
@@ -157,17 +119,22 @@ def edge_attribution_patching(
     with model.trace() as tracer:
         with tracer.invoke(**grad_inputs):
             for layer_component in layer_components:
-                comp = _locate_layer_component(model, layer_component).save()
+                comp = locate_layer_component(model, layer_component).save()
                 comp.requires_grad_()
                 comp.retain_grad()
                 activation_cache[layer_component] = comp
-            logits = model.lm_head.output[:, -1, :].save()  # type: ignore
+            logits = model.lm_head.output.save()  # type: ignore
             metric = metric_fn(logits)
             metric.backward()
 
     grads = activation_cache.get_grads()
 
-    eap_scores = ((clean_activations - corrupted_activations) * grads).apply(torch.sum, dim=-1)
+    eap_scores = (
+        ((clean_activations - corrupted_activations) * grads)
+        .apply(torch.sum, dim=-1)
+        .apply(torch.mean)
+    )
+    eap_scores.value_type = "eap_scores"
     return eap_scores
 
 
@@ -224,7 +191,7 @@ def eap_integrated_gradients(
 
     for alpha in alphas:
         interpolated_embeddings = (
-            _interpolate_activations(clean_embeddings, corrupted_embeddings, alpha)
+            interpolate_activations(clean_embeddings, corrupted_embeddings, alpha)
             .detach()
             .requires_grad_(True)
         )
@@ -235,7 +202,7 @@ def eap_integrated_gradients(
         with model.trace() as tracer:
             with tracer.invoke(**synthetic_input_dict):
                 for layer_component in layer_components:
-                    comp = _locate_layer_component(model, layer_component).save()
+                    comp = locate_layer_component(model, layer_component).save()
                     comp.requires_grad_()
                     comp.retain_grad()
                     dummy_activation_cache[layer_component] = comp
@@ -250,10 +217,14 @@ def eap_integrated_gradients(
         gc.collect()
         torch.cuda.empty_cache()
 
-    eap_scores = ((clean_activations - corrupted_activations) * grad_accumulator).apply(
-        torch.sum, dim=-1
+    eap_ig_scores = (
+        ((clean_activations - corrupted_activations) * grad_accumulator)
+        .apply(torch.sum, dim=-1)
+        .apply(torch.mean)
     )
-    return eap_scores
+
+    eap_ig_scores.value_type = "eap_ig_scores"
+    return eap_ig_scores
 
 
 def eap_ig_with_probes():

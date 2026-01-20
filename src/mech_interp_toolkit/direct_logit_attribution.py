@@ -5,6 +5,8 @@ import einops
 import torch
 from nnsight import NNsight
 
+from .activation_dict import ActivationDict
+from .activation_utils import locate_layer_component
 from .utils import ChatTemplateTokenizer, get_all_layer_components, get_num_layers
 
 
@@ -47,7 +49,7 @@ def run_componentwise_dla(
     inputs: dict[str, torch.Tensor],
     pre_rms_direction: torch.Tensor,
     eps: float = 1e-6,
-) -> dict[str, dict[int, torch.Tensor]]:
+) -> ActivationDict:
     """
     Performs component-wise Direct Logit Attribution (DLA).
 
@@ -62,35 +64,35 @@ def run_componentwise_dla(
     """
 
     n_layers = get_num_layers(model)
-    device = pre_rms_direction.device
+
+    output = ActivationDict(model.model.config, [-1])
 
     # Prepare components to fetch
     layers_components = get_all_layer_components(model)
     layers_components.append((n_layers - 1, "layer_out"))
 
-    # Get activations
-    spec_dict: SpecDict = {"activations": {"positions": -1, "locations": layers_components}}
-    with UAP(model, inputs, spec_dict) as uap:
-        activations, _ = uap.unified_access_and_patching()
-
-    if activations is None:
-        raise RuntimeError("Failed to retrieve activations from the model.")
+    with model.trace() as tracer:
+        with tracer.invoke(**inputs):
+            for layer_component in layers_components:
+                output[layer_component] = locate_layer_component(model, layer_component)[
+                    :, [-1], :
+                ].save()  # type: ignore
 
     # Calculate divisor
-    final_layer_output = activations[(n_layers - 1, "layer_out")].squeeze(1).to(device)
+    final_layer_output = output[(n_layers - 1, "layer_out")].squeeze(1)
     rms_final = final_layer_output.norm(dim=-1, keepdim=True)
     divisor = torch.sqrt(rms_final**2 + eps).squeeze()
 
+    output.pop((n_layers - 1, "layer_out"))
+
     # Calculate DLA
-    dla_scores = {}
-    for layer_component, activation in activations.items():
+    for layer_component, activation in output.items():
         _, component = layer_component
         if component == "layer_out":
             continue
-        dla_scores[layer_component] = (
-            activation.squeeze(1).to(device) @ pre_rms_direction
-        ) / divisor
-    return dla_scores
+        output[layer_component] = (activation.squeeze(1) @ pre_rms_direction) / divisor
+    output.value_type = "dla_scores"
+    return output
 
 
 def run_headwise_dla_for_layer(
@@ -99,7 +101,7 @@ def run_headwise_dla_for_layer(
     pre_rms_direction: torch.Tensor,
     layer: int,
     eps: float = 1e-6,
-) -> torch.Tensor:
+) -> ActivationDict:
     """
     Performs head-wise Direct Logit Attribution (DLA) for a specific layer.
     Args:
@@ -118,20 +120,23 @@ def run_headwise_dla_for_layer(
     # Define components to fetch
     layers_components = [(layer, "z"), (n_layers - 1, "layer_out")]
 
-    # Get activations
-    spec_dict: SpecDict = {"activations": {"positions": -1, "locations": layers_components}}
-    with UAP(model, inputs, spec_dict) as uap:
-        activations, _ = uap.unified_access_and_patching()
+    output = ActivationDict(model.model.config, [-1])
 
-    if activations is None:
-        raise RuntimeError("Failed to retrieve activations from the model.")
+    with model.trace() as tracer:
+        with tracer.invoke(**inputs):
+            for layer_component in layers_components:
+                output[layer_component] = locate_layer_component(model, layer_component)[
+                    :, [-1], :
+                ].save()  # type: ignore
 
-    head_inputs = activations[(layer, "z")].squeeze(1)
-    final_layer_output = activations[(n_layers - 1, "layer_out")].squeeze(1)
+    head_inputs = output.split_heads()[(layer, "z")].squeeze(1)
 
+    final_layer_output = output[(n_layers - 1, "layer_out")].squeeze(1)
     rms_final = final_layer_output.norm(dim=-1, keepdim=True)
 
     divisor = torch.sqrt(rms_final**2 + eps)
+
+    output.pop((n_layers - 1, "layer_out"))
 
     batch_size = head_inputs.shape[0]
     head_inputs = head_inputs.view(batch_size, num_heads, -1)
@@ -145,5 +150,6 @@ def run_headwise_dla_for_layer(
         pre_rms_direction,
         "batch n_heads head_dim, d_model n_heads head_dim, d_model -> batch n_heads",
     )
-
-    return projections / divisor
+    output[(layer, "z")] = projections / divisor
+    output.value_type = "dla_scores"
+    return output
