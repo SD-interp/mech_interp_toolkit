@@ -7,7 +7,7 @@ from nnsight import NNsight
 
 from .activation_dict import ActivationDict
 from .activation_utils import locate_layer_component
-from .utils import ChatTemplateTokenizer, get_all_layer_components, get_num_layers
+from .utils import ChatTemplateTokenizer, get_layer_components, get_num_layers
 
 
 def get_pre_rms_logit_diff_direction(
@@ -68,7 +68,7 @@ def run_componentwise_dla(
     output = ActivationDict(model.model.config, [-1])
 
     # Prepare components to fetch
-    layers_components = get_all_layer_components(model)
+    layers_components = get_layer_components(model)
     layers_components.append((n_layers - 1, "layer_out"))
 
     with model.trace() as tracer:

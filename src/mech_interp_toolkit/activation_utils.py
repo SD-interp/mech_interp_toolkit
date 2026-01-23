@@ -7,21 +7,31 @@ from .activation_dict import ActivationDict, LayerComponent
 
 
 def get_activations(
-    model: NNsight, inputs: dict[str, torch.Tensor], layer_components: list[LayerComponent]
+    model: NNsight,
+    inputs: dict[str, torch.Tensor],
+    layer_components: list[LayerComponent],
+    retain_grads: bool = True,
 ) -> ActivationDict:
     output = ActivationDict(model.model.config, slice(None))
     with model.trace() as tracer:
         with tracer.invoke(**inputs):
             for layer_component in layer_components:
                 output[layer_component] = locate_layer_component(model, layer_component).save()  # type: ignore
-                output[layer_component].requires_grad_()
-                output[layer_component].retain_grad()
+                if retain_grads:
+                    output[layer_component].requires_grad_()
+                    output[layer_component].retain_grad()
             tracer.stop()
     return output
 
 
-def get_embeddings(model: NNsight, inputs: dict[str, torch.Tensor]) -> ActivationDict:
-    return get_activations(model, inputs, [(0, "layer_in")])
+def get_embeddings_dict(model: NNsight, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if "inputs_embeds" in inputs:
+        pass
+    else:
+        embeds = get_activations(model, inputs, [(0, "layer_in")])
+        inputs.pop("input_ids", None)
+        inputs["inputs_embeds"] = embeds[(0, "layer_in")]
+    return inputs
 
 
 def interpolate_activations(
@@ -40,7 +50,11 @@ def locate_layer_component(model: NNsight, layer_component: LayerComponent) -> A
     layer, component = layer_component
 
     layers = cast(Any, model.model.layers)
-    if component == "attn":
+    if component == "logits":
+        comp = model.lm_head.output
+    elif component == "inputs_embeds":
+        comp = layers[0].input
+    elif component == "attn":
         comp = layers[layer].self_attn.output[0]
     elif component == "mlp":
         comp = layers[layer].mlp.output

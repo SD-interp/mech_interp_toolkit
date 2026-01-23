@@ -118,7 +118,7 @@ def get_num_layers(model: NNsight) -> int:
     return cast(int, model.model.config.num_hidden_layers)  # type: ignore
 
 
-def get_all_layer_components(model: NNsight) -> list[tuple[int, str]]:
+def get_layer_components(model: NNsight, stop_at: Optional[int] = None) -> list[tuple[int, str]]:
     """
     Get a list of all (layer, component) tuples for attention and MLP components.
 
@@ -128,7 +128,10 @@ def get_all_layer_components(model: NNsight) -> list[tuple[int, str]]:
     Returns:
         A list of tuples containing (layer_index, component_name) for all layers.
     """
-    n_layers = get_num_layers(model)
+    if stop_at is not None:
+        n_layers = stop_at + 1
+    else:
+        n_layers = get_num_layers(model)
     return [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
 
 

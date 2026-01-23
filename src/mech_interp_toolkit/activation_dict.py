@@ -168,7 +168,9 @@ class ActivationDict(ArithmeticOperation):
         self.config = config
         self.num_heads = config.num_attention_heads
         self.num_layers = config.num_hidden_layers
-        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        self.head_dim = getattr(
+            config, "head_dim", config.hidden_size // config.num_attention_heads
+        )
         self.model_dim = config.hidden_size
         self.num_kv_heads = getattr(config, "num_key_value_heads", self.num_heads)
         self.fused_heads = True
@@ -254,15 +256,32 @@ class ActivationDict(ArithmeticOperation):
 
     def apply(
         self,
-        function: Callable[[torch.Tensor], torch.Tensor],
+        function: Callable,
         *args,
         **kwargs,
     ) -> Self:
+        mask_aware = kwargs.pop("mask_aware", False)
+
+        if mask_aware:
+            warnings.warn("Using .apply() with mask_aware is not grad safe")
+
+            base_mask = self.attention_mask.bool()
+
+            def apply_func(x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+                mask = base_mask
+                while mask.ndim < x.ndim:
+                    mask = mask.unsqueeze(-1)
+
+                x_masked = torch.where(mask, x, torch.nan)
+                return function(x_masked, *args, **kwargs)
+        else:
+            apply_func = function
+
         output = type(self)(self.config, self.positions)
         output.value_type = self.value_type
         output.attention_mask = self.attention_mask
         for layer, component in self.keys():
-            output[(layer, component)] = function(self[(layer, component)], *args, **kwargs)
+            output[(layer, component)] = apply_func(self[(layer, component)], *args, **kwargs)
 
         return output
 

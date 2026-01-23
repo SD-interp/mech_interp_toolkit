@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, Self
 
 import numpy as np
 import torch
@@ -6,7 +6,7 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import accuracy_score, root_mean_squared_error
 from sklearn.model_selection import train_test_split
 
-from .activation_dict import ActivationDict
+from .activation_dict import ActivationDict, LayerComponent
 
 
 class LinearProbe:
@@ -33,6 +33,8 @@ class LinearProbe:
 
         self.weight: Optional[np.ndarray] = None
         self.bias: Optional[np.ndarray | float] = None
+
+        self.location: Optional[LayerComponent] = None
 
     def _process_batch(
         self, inputs: np.ndarray, target: Optional[np.ndarray]
@@ -72,6 +74,8 @@ class LinearProbe:
         if len(activations) != 1:
             raise ValueError("Only single components are supported")
 
+        self.location = list(activations.keys())[0]
+
         # Raw inputs: (Batch, [Pos], D_model)
         inputs_full = list(activations.values())[0].cpu().numpy()
 
@@ -103,11 +107,13 @@ class LinearProbe:
 
         print(f"{label} {metric_name}: {metric:.4f}")
 
-    def fit(self, activations: ActivationDict, target: torch.Tensor | np.ndarray) -> "LinearProbe":
+    def fit(self, activations: ActivationDict, target: torch.Tensor | np.ndarray) -> Self:
         X_train, X_test, y_train, y_test = self.prepare_data(activations, target)  # noqa: N806
 
         if y_test is None or y_train is None:
             raise ValueError("Target cannot be None for fitting the linear probe.")
+
+        self.location = list(activations.keys())[0]
 
         print(f"Train set size: {len(X_train)}, Test set size: {len(X_test)}")
 
