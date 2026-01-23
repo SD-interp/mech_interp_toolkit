@@ -52,7 +52,9 @@ def _get_alpha_values(steps: int, dtype: torch.dtype) -> torch.Tensor:
     return (torch.arange(steps, dtype=dtype) + 0.5) / steps
 
 
-def _setup_probe_components(probe: LinearProbe) -> tuple[tuple[int, str], torch.Tensor, torch.Tensor]:
+def _setup_probe_components(
+    probe: LinearProbe,
+) -> tuple[tuple[int, str], torch.Tensor, torch.Tensor]:
     """Extract and prepare probe location, weight, and bias tensors."""
     if probe.location is None:
         raise RuntimeError("probe.location cannot be None.")
@@ -295,11 +297,23 @@ def simple_ig_with_probes(
 
                 probe_output = einsum(
                     acts,
-                    probe_weight,
+                    probe_weight.T,
                     "batch pos d_model, d_model d_probe -> batch pos d_probe",
                 ) + probe_bias.view(1, 1, -1)
 
+                if probe.target_type == "classification":
+                    if probe_output.shape[-1] == 1:
+                        probe_output = torch.sigmoid(probe_output)
+                    else:
+                        probe_output = torch.softmax(probe_output, dim=-1)
+
+                elif probe.target_type == "regression":
+                    pass
+                else:
+                    raise ValueError(f"Unknown probe target type: {probe.target_type}")
+
                 metric = metric_fn(probe_output)
+
                 metric.backward()
 
         if interpolated_embeddings.grad is None:
@@ -368,9 +382,20 @@ def eap_ig_with_probes(
 
                 probe_output = einsum(
                     acts,
-                    probe_weight,
+                    probe_weight.T,
                     "batch pos d_model, d_model d_probe -> batch pos d_probe",
                 ) + probe_bias.view(1, 1, -1)
+
+                if probe.target_type == "classification":
+                    if probe_output.shape[-1] == 1:
+                        probe_output = torch.sigmoid(probe_output)
+                    else:
+                        probe_output = torch.softmax(probe_output, dim=-1)
+
+                elif probe.target_type == "regression":
+                    pass
+                else:
+                    raise ValueError(f"Unknown probe target type: {probe.target_type}")
 
                 metric = metric_fn(probe_output)
                 if metric.ndim != 0:
