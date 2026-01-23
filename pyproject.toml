@@ -29,7 +29,7 @@ packages = ["mech_interp_toolkit"]
 
 [tool.setuptools_scm]
 # optional but recommended
-version_scheme = "guess-next-dev"
+version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
 
 [project.optional-dependencies]
