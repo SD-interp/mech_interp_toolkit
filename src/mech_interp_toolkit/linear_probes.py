@@ -37,7 +37,7 @@ class LinearProbe:
         self.location: Optional[LayerComponent] = None
 
     def _process_batch(
-        self, inputs: np.ndarray, target: Optional[np.ndarray]
+        self, inputs: np.ndarray, target: Optional[np.ndarray], mask: Optional[np.ndarray] = None
     ) -> tuple[np.ndarray, Optional[np.ndarray]]:
         """Helper to flatten/broadcast a specific batch (Train or Test)."""
         if inputs.ndim == 2:
@@ -66,6 +66,28 @@ class LinearProbe:
             else:
                 target_flat = target.reshape(-1) if target.ndim > 1 else target
 
+        # Apply attention mask if provided
+        if mask is not None:
+            # Flatten mask to match inputs_flat shape
+            if inputs.ndim == 2:
+                # Shape: (Batch,) -> no position dimension
+                mask_flat = mask if mask.ndim == 1 else mask.reshape(-1)
+            elif inputs.ndim == 3:
+                # Shape: (Batch, Pos) -> flatten to match (Batch * Pos,)
+                mask_flat = mask.reshape(-1)
+
+            # Ensure mask_flat has the same length as inputs_flat
+            if len(mask_flat) != len(inputs_flat):
+                raise ValueError(
+                    f"Mask shape mismatch: mask has {len(mask_flat)} elements "
+                    f"but inputs_flat has {len(inputs_flat)} elements. "
+                    f"Original inputs shape: {inputs.shape}, mask shape: {mask.shape}"
+                )
+
+            inputs_flat = inputs_flat[mask_flat]
+            if target_flat is not None:
+                target_flat = target_flat[mask_flat]
+
         return inputs_flat, target_flat
 
     def prepare_data(
@@ -82,6 +104,11 @@ class LinearProbe:
         if isinstance(target, torch.Tensor):
             target = target.cpu().numpy()
 
+        # Get attention mask if available
+        attention_mask = None
+        if activations.attention_mask is not None:
+            attention_mask = activations.attention_mask.cpu().numpy()
+
         indices = np.arange(inputs_full.shape[0])
         train_idx, test_idx = train_test_split(indices, test_size=self.test_split)
 
@@ -91,9 +118,13 @@ class LinearProbe:
         X_test_raw = inputs_full[test_idx]  # noqa: N806
         y_test_raw = target[test_idx]
 
+        # Slice attention mask if present
+        mask_train = attention_mask[train_idx] if attention_mask is not None else None
+        mask_test = attention_mask[test_idx] if attention_mask is not None else None
+
         # Now flatten/broadcast train and test independently
-        X_train, y_train = self._process_batch(X_train_raw, y_train_raw)  # noqa: N806
-        X_test, y_test = self._process_batch(X_test_raw, y_test_raw)  # noqa: N806
+        X_train, y_train = self._process_batch(X_train_raw, y_train_raw, mask_train)  # noqa: N806
+        X_test, y_test = self._process_batch(X_test_raw, y_test_raw, mask_test)  # noqa: N806
 
         return X_train, X_test, y_train, y_test
 
@@ -144,8 +175,13 @@ class LinearProbe:
             if isinstance(target, torch.Tensor):
                 target = target.cpu().numpy()
 
+        # Get attention mask if available
+        mask = None
+        if activations.attention_mask is not None:
+            mask = activations.attention_mask.cpu().numpy()
+
         # Process the entire batch for inference (no splitting needed here)
-        inputs, target = self._process_batch(inputs_full, target)
+        inputs, target = self._process_batch(inputs_full, target, mask)
 
         preds = self.linear_model.predict(inputs)
         print(f"{label} set size: {len(inputs)}")
