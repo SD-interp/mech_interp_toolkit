@@ -1,5 +1,6 @@
 from typing import Literal, Optional, Self
 
+import einops
 import numpy as np
 import torch
 from sklearn.linear_model import LinearRegression, LogisticRegression
@@ -40,51 +41,31 @@ class LinearProbe:
         self, inputs: np.ndarray, target: Optional[np.ndarray], mask: Optional[np.ndarray] = None
     ) -> tuple[np.ndarray, Optional[np.ndarray]]:
         """Helper to flatten/broadcast a specific batch (Train or Test)."""
-        if inputs.ndim == 2:
-            # Shape: (Batch, D_model) -> Treat as single position
-            positions = 1
-        elif inputs.ndim == 3:
-            # Shape: (Batch, Pos, D_model)
-            positions = inputs.shape[1]
-        else:
-            raise ValueError(f"Unexpected input shape: {inputs.shape}")
 
+        positions = inputs.shape[1]
         d_model = inputs.shape[-1]
 
-        inputs_flat = inputs.reshape(-1, d_model)
-
+        # (n_set * pos, d_model)
+        inputs_flat = einops.rearrange(inputs, "n_set pos d_model -> (n_set pos) d_model")
         target_flat = None
+
         if target is not None:
-            if self.broadcast_target and positions > 1:
-                if target.ndim != 1:
-                    raise ValueError(
-                        f"broadcast_target=True expects 1D targets (batch_size,), "
-                        f"but got shape {target.shape}. If you have token-level targets, "
-                        "set broadcast_target=False."
-                    )
-                target_flat = np.repeat(target, positions, axis=0)
+            if target.ndim == 1:
+                if self.broadcast_target:
+                    target_flat = einops.repeat(target, "n_set -> (n_set pos)", pos=positions)
+            elif target.ndim == 2:
+                target_flat = einops.rearrange(target, "n_set pos -> (n_set pos)")
             else:
-                target_flat = target.reshape(-1) if target.ndim > 1 else target
+                raise ValueError(f"Incorrect shape {target.shape} for target")
 
         # Apply attention mask if provided
         if mask is not None:
             # Flatten mask to match inputs_flat shape
-            if inputs.ndim == 2:
-                # Shape: (Batch,) -> no position dimension
-                mask_flat = mask if mask.ndim == 1 else mask.reshape(-1)
-            elif inputs.ndim == 3:
-                # Shape: (Batch, Pos) -> flatten to match (Batch * Pos,)
-                mask_flat = mask.reshape(-1)
+            mask_flat = einops.rearrange(mask, "n_set pos -> (n_set pos)")
+            if mask_flat.shape[0] != inputs_flat.shape[0]:
+                raise ValueError("mask-input shape mismatch")
 
-            # Ensure mask_flat has the same length as inputs_flat
-            if len(mask_flat) != len(inputs_flat):
-                raise ValueError(
-                    f"Mask shape mismatch: mask has {len(mask_flat)} elements "
-                    f"but inputs_flat has {len(inputs_flat)} elements. "
-                    f"Original inputs shape: {inputs.shape}, mask shape: {mask.shape}"
-                )
-
-            inputs_flat = inputs_flat[mask_flat]
+            inputs_flat = inputs_flat[mask_flat, :]
             if target_flat is not None:
                 target_flat = target_flat[mask_flat]
 
@@ -98,8 +79,8 @@ class LinearProbe:
 
         self.location = list(activations.keys())[0]
 
-        # Raw inputs: (Batch, [Pos], D_model)
-        inputs_full = list(activations.values())[0].cpu().numpy()
+        # Raw inputs: (batch, pos, d_model)
+        inputs_full = list(activations.values())[0].cpu().detach().numpy()
 
         if isinstance(target, torch.Tensor):
             target = target.cpu().numpy()
@@ -107,24 +88,34 @@ class LinearProbe:
         # Get attention mask if available
         attention_mask = None
         if activations.attention_mask is not None:
+            # Attention mask: (batch, pos)
             attention_mask = activations.attention_mask.cpu().numpy()
 
-        indices = np.arange(inputs_full.shape[0])
-        train_idx, test_idx = train_test_split(indices, test_size=self.test_split)
+        # Flatten and apply mask BEFORE splitting to ensure proper stratification
+        inputs_flat, target_flat = self._process_batch(inputs_full, target, attention_mask)
 
-        # Slice data based on indices
-        X_train_raw = inputs_full[train_idx]  # noqa: N806
-        y_train_raw = target[train_idx]
-        X_test_raw = inputs_full[test_idx]  # noqa: N806
-        y_test_raw = target[test_idx]
+        if target_flat is None:
+            raise ValueError("Target cannot be None for preparing data.")
 
-        # Slice attention mask if present
-        mask_train = attention_mask[train_idx] if attention_mask is not None else None
-        mask_test = attention_mask[test_idx] if attention_mask is not None else None
+        # Indices at token level (after masking)
+        indices = np.arange(inputs_flat.shape[0])
 
-        # Now flatten/broadcast train and test independently
-        X_train, y_train = self._process_batch(X_train_raw, y_train_raw, mask_train)  # noqa: N806
-        X_test, y_test = self._process_batch(X_test_raw, y_test_raw, mask_test)  # noqa: N806
+        # Use stratified split for classification to ensure both sets have all classes
+        stratify = target_flat if self.target_type == "classification" else None
+
+        train_idx, test_idx = train_test_split(
+            indices, test_size=self.test_split, stratify=stratify
+        )
+
+        # Convert to proper numpy arrays for indexing
+        train_idx = np.asarray(train_idx, dtype=int)
+        test_idx = np.asarray(test_idx, dtype=int)
+
+        # Slice flattened data based on token indices
+        X_train = inputs_flat[train_idx, :]  # noqa: N806
+        y_train = target_flat[train_idx]
+        X_test = inputs_flat[test_idx, :]  # noqa: N806
+        y_test = target_flat[test_idx]
 
         return X_train, X_test, y_train, y_test
 
@@ -147,6 +138,8 @@ class LinearProbe:
         self.location = list(activations.keys())[0]
 
         print(f"Train set size: {len(X_train)}, Test set size: {len(X_test)}")
+        print(f"y_train unique values: {np.unique(y_train)}, counts: {np.bincount(y_train.astype(int)) if self.target_type == 'classification' else 'N/A'}")
+        print(f"y_test unique values: {np.unique(y_test)}, counts: {np.bincount(y_test.astype(int)) if self.target_type == 'classification' else 'N/A'}")
 
         self.linear_model.fit(X_train, y_train)
         self.weight = self.linear_model.coef_
