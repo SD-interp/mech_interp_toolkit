@@ -21,6 +21,8 @@ def get_activations(
                     output[layer_component].requires_grad_()
                     output[layer_component].retain_grad()
             tracer.stop()
+    output.attention_mask = inputs["attention_mask"]
+    output.value_type = "activation"
     return output
 
 

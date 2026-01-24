@@ -43,33 +43,37 @@ class LinearProbe:
         """Helper to flatten/broadcast a specific batch (Train or Test)."""
 
         positions = inputs.shape[1]
-        d_model = inputs.shape[-1]
 
-        # (n_set * pos, d_model)
-        inputs_flat = einops.rearrange(inputs, "n_set pos d_model -> (n_set pos) d_model")
-        target_flat = None
-
-        if target is not None:
-            if target.ndim == 1:
-                if self.broadcast_target:
-                    target_flat = einops.repeat(target, "n_set -> (n_set pos)", pos=positions)
-            elif target.ndim == 2:
-                target_flat = einops.rearrange(target, "n_set pos -> (n_set pos)")
-            else:
-                raise ValueError(f"Incorrect shape {target.shape} for target")
-
-        # Apply attention mask if provided
         if mask is not None:
-            # Flatten mask to match inputs_flat shape
-            mask_flat = einops.rearrange(mask, "n_set pos -> (n_set pos)")
-            if mask_flat.shape[0] != inputs_flat.shape[0]:
-                raise ValueError("mask-input shape mismatch")
+            mask = mask.astype(bool)
+            inputs = inputs[mask]  # results in (batch*pos†, d_model)
+            if target is not None:
+                if target.ndim == 1:
+                    if self.broadcast_target:
+                        target = einops.repeat(
+                            target, "n_set -> n_set pos", pos=positions
+                        )  # (n_set, pos)
+                    else:
+                        raise ValueError(
+                            "When providing 1 label per prompt use broadcast_target=True"
+                        )
+                target = target[mask]  # results in (batch*pos†)
+        else:
+            inputs = einops.rearrange(inputs, "batch pos d_model -> (batch pos) d_model")
+            if target is not None:
+                if target.ndim == 1:
+                    if self.broadcast_target:
+                        target = einops.repeat(
+                            target, "n_set -> (n_set pos)", pos=positions
+                        )  # (n_set * pos)
+                    else:
+                        raise ValueError(
+                            "When providing 1 label per prompt use broadcast_target=True"
+                        )
+                else:
+                    target = einops.rearrange(target, "batch pos -> (batch pos)")
 
-            inputs_flat = inputs_flat[mask_flat, :]
-            if target_flat is not None:
-                target_flat = target_flat[mask_flat]
-
-        return inputs_flat, target_flat
+        return inputs, target
 
     def prepare_data(
         self, activations: ActivationDict, target: torch.Tensor | np.ndarray
@@ -138,8 +142,12 @@ class LinearProbe:
         self.location = list(activations.keys())[0]
 
         print(f"Train set size: {len(X_train)}, Test set size: {len(X_test)}")
-        print(f"y_train unique values: {np.unique(y_train)}, counts: {np.bincount(y_train.astype(int)) if self.target_type == 'classification' else 'N/A'}")
-        print(f"y_test unique values: {np.unique(y_test)}, counts: {np.bincount(y_test.astype(int)) if self.target_type == 'classification' else 'N/A'}")
+        print(
+            f"y_train unique values: {np.unique(y_train)}, counts: {np.bincount(y_train.astype(int)) if self.target_type == 'classification' else 'N/A'}"
+        )
+        print(
+            f"y_test unique values: {np.unique(y_test)}, counts: {np.bincount(y_test.astype(int)) if self.target_type == 'classification' else 'N/A'}"
+        )
 
         self.linear_model.fit(X_train, y_train)
         self.weight = self.linear_model.coef_
