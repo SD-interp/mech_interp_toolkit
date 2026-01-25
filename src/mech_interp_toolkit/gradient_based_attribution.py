@@ -54,18 +54,20 @@ def _get_alpha_values(steps: int, dtype: torch.dtype) -> torch.Tensor:
 
 def _setup_probe_components(
     probe: LinearProbe,
+    input_embeddings: torch.Tensor,
 ) -> tuple[tuple[int, str], torch.Tensor, torch.Tensor]:
     """Extract and prepare probe location, weight, and bias tensors."""
     if probe.location is None:
         raise RuntimeError("probe.location cannot be None.")
     probe_location, probe_component = probe.location
+    dtype = input_embeddings.dtype
 
     if probe.weight is None or probe.bias is None:
         raise RuntimeError("probe.weight and probe.bias cannot be None.")
 
-    probe_weight = torch.tensor(probe.weight)
+    probe_weight = torch.tensor(probe.weight).to("cuda:0").to(dtype)
     probe_weight.requires_grad_(True)
-    probe_bias = torch.tensor(probe.bias)
+    probe_bias = torch.tensor(probe.bias).to("cuda:0").to(dtype)
     probe_bias.requires_grad_(True)
 
     return (probe_location, probe_component), probe_weight, probe_bias
@@ -261,7 +263,7 @@ def simple_ig_with_probes(
     probe: LinearProbe,
     metric_fn: Callable = torch.mean,
     steps: int = 5,
-):
+) -> ActivationDict:
     """
     Computes vanilla integrated w.r.t. input embeddings. Metric function is applied to the output of the linear probe.
     Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
@@ -282,7 +284,9 @@ def simple_ig_with_probes(
     alphas = _get_alpha_values(steps, input_embeddings.dtype)
     accumulated_grads = torch.zeros_like(input_embeddings)
 
-    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(probe)
+    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(
+        probe, input_embeddings
+    )
 
     for alpha in alphas:
         interpolated_embeddings = (
@@ -348,8 +352,6 @@ def eap_ig_with_probes(
             "Integrated Gradients requires gradient computation. Run with torch.enable_grad()"
         )
 
-    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(probe)
-
     layer_components = get_layer_components(model, stop_at=probe_location)
 
     input_activations = get_activations(model, input_dict, [(0, "layer_in")] + layer_components)
@@ -359,6 +361,10 @@ def eap_ig_with_probes(
 
     input_embeddings = input_activations[(0, "layer_in")]
     baseline_embeddings = baseline_activations[(0, "layer_in")]
+
+    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(
+        probe, input_embeddings
+    )
 
     _validate_embeddings(input_embeddings, baseline_embeddings)
 
