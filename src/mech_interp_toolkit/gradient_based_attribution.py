@@ -117,8 +117,6 @@ def simple_integrated_gradients(
             with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
                 logits = model.lm_head.output.save()  # type: ignore
                 metric = metric_fn(logits)
-                if metric.ndim != 0:
-                    metric = metric.sum()
                 metric.backward()
 
         if interpolated_embeddings.grad is None:
@@ -173,6 +171,8 @@ def edge_attribution_patching(
                 activation_cache[layer_component] = comp
             logits = model.lm_head.output.save()  # type: ignore
             metric = metric_fn(logits)
+            if metric.ndim != 0:
+                metric = metric.sum()
             metric.backward()
 
     grads = activation_cache.get_grads()
@@ -215,10 +215,8 @@ def eap_integrated_gradients(
     input_embeddings.grad = None
     baseline_embeddings.grad = None
 
-    # Midpoint Riemann sum
-    alphas = _get_alpha_values(steps, input_embeddings.dtype)
     synthetic_input_dict = _prepare_synthetic_inputs(input_dict)
-
+    alphas = _get_alpha_values(steps, input_embeddings.dtype)
     accumulated_grads = input_activations.zeros_like(layer_components)
 
     for alpha in alphas:
@@ -240,6 +238,8 @@ def eap_integrated_gradients(
                     dummy_activation_cache[layer_component] = comp
                 logits = model.lm_head.output.save()  # type: ignore
                 metric = metric_fn(logits)
+                if metric.ndim != 0:
+                    metric = metric.sum()
                 metric.backward()
 
         temp_grads = dummy_activation_cache.get_grads()
@@ -280,93 +280,9 @@ def simple_ig_with_probes(
 
     _validate_embeddings(input_embeddings, baseline_embeddings)
 
-    synthetic_inputs = _prepare_synthetic_inputs(input_dict)
-    alphas = _get_alpha_values(steps, input_embeddings.dtype)
-    accumulated_grads = torch.zeros_like(input_embeddings)
-
     (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(
         probe, input_embeddings
     )
-
-    for alpha in alphas:
-        interpolated_embeddings = (
-            interpolate_activations(baseline_embeddings, input_embeddings, alpha)
-            .detach()
-            .requires_grad_(True)
-        )
-
-        with model.trace() as tracer:
-            with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
-                acts = locate_layer_component(model, (probe_location, probe_component)).save()
-
-                probe_output = einsum(
-                    acts,
-                    probe_weight.T,
-                    "batch pos d_model, d_model d_probe -> batch pos d_probe",
-                ) + probe_bias.view(1, 1, -1)
-
-                if probe.target_type == "classification":
-                    if probe_output.shape[-1] == 1:
-                        probe_output = torch.sigmoid(probe_output)
-                    else:
-                        probe_output = torch.softmax(probe_output, dim=-1)
-
-                elif probe.target_type == "regression":
-                    pass
-                else:
-                    raise ValueError(f"Unknown probe target type: {probe.target_type}")
-
-                metric = metric_fn(probe_output)
-
-                metric.backward()
-
-        if interpolated_embeddings.grad is None:
-            raise RuntimeError("Failed to retrieve gradients.")
-        accumulated_grads = accumulated_grads + (interpolated_embeddings.grad / steps)
-
-        _cleanup_memory()
-
-    integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1)
-    output = ActivationDict(model.model.config, slice(None))
-    output[(0, "layer_in")] = integrated_grads
-    output.value_type = "ig_with_probe_scores"
-    return output
-
-
-def eap_ig_with_probes(
-    model: NNsight,
-    input_dict: dict[str, torch.Tensor],
-    baseline_dict: dict[str, torch.Tensor],
-    probe: LinearProbe,
-    metric_fn: Callable = torch.mean,
-    steps: int = 50,
-):
-    """
-    Computes vanilla integrated w.r.t. input embeddings. Metric function is applied to the output of the linear probe.
-    Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
-    https://arxiv.org/abs/1703.01365
-    """
-
-    if not torch.is_grad_enabled():
-        raise RuntimeError(
-            "Integrated Gradients requires gradient computation. Run with torch.enable_grad()"
-        )
-
-    layer_components = get_layer_components(model, stop_at=probe_location)
-
-    input_activations = get_activations(model, input_dict, [(0, "layer_in")] + layer_components)
-    baseline_activations = get_activations(
-        model, baseline_dict, [(0, "layer_in")] + layer_components
-    )
-
-    input_embeddings = input_activations[(0, "layer_in")]
-    baseline_embeddings = baseline_activations[(0, "layer_in")]
-
-    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(
-        probe, input_embeddings
-    )
-
-    _validate_embeddings(input_embeddings, baseline_embeddings)
 
     synthetic_inputs = _prepare_synthetic_inputs(input_dict)
     alphas = _get_alpha_values(steps, input_embeddings.dtype)
@@ -381,9 +297,6 @@ def eap_ig_with_probes(
 
         with model.trace() as tracer:
             with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
-                for layer_component in layer_components:
-                    locate_layer_component(model, layer_component).requires_grad_()
-                    locate_layer_component(model, layer_component).retain_grad()
                 acts = locate_layer_component(model, (probe_location, probe_component)).save()
 
                 probe_output = einsum(
@@ -417,5 +330,97 @@ def eap_ig_with_probes(
     integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1)
     output = ActivationDict(model.model.config, slice(None))
     output[(0, "layer_in")] = integrated_grads
-    output.value_type = "integrated_grads"
+    output.value_type = "ig_with_probe_scores"
     return output
+
+
+def eap_ig_with_probes(
+    model: NNsight,
+    input_dict: dict[str, torch.Tensor],
+    baseline_dict: dict[str, torch.Tensor],
+    probe: LinearProbe,
+    metric_fn: Callable = torch.mean,
+    steps: int = 50,
+) -> ActivationDict:
+    """
+    Computes EAP integrated gradients w.r.t. layer components. Metric function is applied to the output of the linear probe.
+    Combines EAP-IG methodology with linear probe outputs.
+    """
+
+    if not torch.is_grad_enabled():
+        raise RuntimeError(
+            "EAP-IG with probes requires gradient computation. Run with torch.enable_grad()"
+        )
+
+    input_embeddings = get_embeddings_dict(model, input_dict)["inputs_embeds"]
+    baseline_embeddings = get_embeddings_dict(model, baseline_dict)["inputs_embeds"]
+
+    _validate_embeddings(input_embeddings, baseline_embeddings)
+
+    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(
+        probe, input_embeddings
+    )
+
+    # Get layer components up to probe location
+    layer_components = get_layer_components(model, stop_at=probe_location)
+
+    input_activations = get_activations(model, input_dict, layer_components)
+    baseline_activations = get_activations(model, baseline_dict, layer_components)
+
+    synthetic_inputs = _prepare_synthetic_inputs(input_dict)
+    alphas = _get_alpha_values(steps, input_embeddings.dtype)
+    accumulated_grads = input_activations.zeros_like(layer_components)
+
+    for alpha in alphas:
+        interpolated_embeddings = (
+            interpolate_activations(baseline_embeddings, input_embeddings, alpha)
+            .detach()
+            .requires_grad_(True)
+        )
+
+        dummy_activation_cache = ActivationDict(model.model.config, slice(None))
+
+        with model.trace() as tracer:
+            with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
+                for layer_component in layer_components:
+                    comp = locate_layer_component(model, layer_component).save()
+                    comp.requires_grad_()
+                    comp.retain_grad()
+                    dummy_activation_cache[layer_component] = comp
+
+                acts = locate_layer_component(model, (probe_location, probe_component)).save()
+
+                probe_output = einsum(
+                    acts,
+                    probe_weight.T,
+                    "batch pos d_model, d_model d_probe -> batch pos d_probe",
+                ) + probe_bias.view(1, 1, -1)
+
+                if probe.target_type == "classification":
+                    if probe_output.shape[-1] == 1:
+                        probe_output = torch.sigmoid(probe_output)
+                    else:
+                        probe_output = torch.softmax(probe_output, dim=-1)
+
+                elif probe.target_type == "regression":
+                    pass
+                else:
+                    raise ValueError(f"Unknown probe target type: {probe.target_type}")
+
+                metric = metric_fn(probe_output)
+                if metric.ndim != 0:
+                    metric = metric.sum()
+                metric.backward()
+
+        temp_grads = dummy_activation_cache.get_grads()
+        accumulated_grads = accumulated_grads + (temp_grads / steps)
+
+        del temp_grads, dummy_activation_cache
+        _cleanup_memory()
+
+    eap_ig_scores = ((input_activations - baseline_activations) * accumulated_grads).apply(
+        torch.sum, dim=-1
+    )
+
+    eap_ig_scores.value_type = "eap_ig_with_probe_scores"
+    return eap_ig_scores
