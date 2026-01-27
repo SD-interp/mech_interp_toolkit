@@ -2,10 +2,12 @@ import warnings
 from abc import ABC
 from collections.abc import Sequence
 from copy import deepcopy
-from typing import Callable, Literal, Optional, Self
+from typing import Callable, Optional, Self
 
 import einops
 import torch
+
+from .utils import empty_dict_like, regularize_position, zeros_dict_like
 
 type Position = slice | int | Sequence | None
 type LayerComponent = tuple[int, str]
@@ -87,7 +89,7 @@ class ArithmeticOperation(FreezableDict):
     def __add__(self, other) -> Self:
         self.check_compatibility(other)
         if isinstance(other, ActivationDict):
-            result = type(self)(self.config, self.positions)
+            result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] + other[key]
@@ -101,7 +103,7 @@ class ArithmeticOperation(FreezableDict):
     def __sub__(self, other) -> Self:
         self.check_compatibility(other)
         if isinstance(other, ActivationDict):
-            result = type(self)(self.config, self.positions)
+            result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] - other[key]
@@ -112,13 +114,13 @@ class ArithmeticOperation(FreezableDict):
     def __mul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
             self.check_compatibility(other)
-            result = type(self)(self.config, self.positions)
+            result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] * other[key]
             return result
         elif isinstance(other, (int, float, torch.Tensor)):
-            result = type(self)(self.config, self.positions)
+            result = empty_dict_like(self)
             for key in self.keys():
                 result[key] = self[key] * other
             return result
@@ -131,13 +133,13 @@ class ArithmeticOperation(FreezableDict):
     def __truediv__(self, other) -> Self:
         if isinstance(other, ActivationDict):
             self.check_compatibility(other)
-            result = type(self)(self.config, self.positions)
+            result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] / other[key]
             return result
         elif isinstance(other, (int, float, torch.Tensor)):
-            result = type(self)(self.config, self.positions)
+            result = empty_dict_like(self)
             for key in self.keys():
                 result[key] = self[key] / other
             return result
@@ -162,7 +164,7 @@ class ActivationDict(ArithmeticOperation):
         self,
         config,
         positions,
-        value_type: Literal["gradient", "scores", "activation"] = "activation",
+        value_type: str = "activation",
     ):
         super().__init__()
         self.config = config
@@ -174,9 +176,15 @@ class ActivationDict(ArithmeticOperation):
         self.model_dim = config.hidden_size
         self.num_kv_heads = getattr(config, "num_key_value_heads", self.num_heads)
         self.fused_heads = True
-        self.positions = positions
+        self.positions = regularize_position(positions)
         self.value_type = value_type  # e.g., 'activation' or 'gradient' or 'scores'
         self.attention_mask = torch.tensor([])  # Placeholder for attention mask
+
+    def empty_like(self) -> Self:
+        return empty_dict_like(self)
+
+    def zeros_like(self) -> Self:
+        return zeros_dict_like(self)
 
     def reorganize(self) -> Self:
         execution_order = {
@@ -187,7 +195,7 @@ class ActivationDict(ArithmeticOperation):
             "layer_out": 4,
         }
 
-        new_dict = type(self)(self.config, self.positions)
+        new_dict = empty_dict_like(self)
         keys = list(self.keys())
         keys = sorted(
             keys,
@@ -277,7 +285,7 @@ class ActivationDict(ArithmeticOperation):
         else:
             apply_func = function
 
-        output = type(self)(self.config, self.positions)
+        output = empty_dict_like(self)
         output.value_type = self.value_type
         output.attention_mask = self.attention_mask
         for layer, component in self.keys():
@@ -297,28 +305,8 @@ class ActivationDict(ArithmeticOperation):
             self[key] = self[key].cpu()
         return self
 
-    def zeros_like(self, keys: Optional[list[LayerComponent]] = None) -> Self:
-        """
-        Creates a new ActivationDict with zero tensors for the specified keys,
-        matching the shapes of the original tensors.
-        """
-        new_obj = type(self)(self.config, self.positions)
-        new_obj.value_type = self.value_type
-        new_obj.attention_mask = self.attention_mask
-
-        if keys is None:
-            keys = list(self.keys())
-
-        for key in keys:
-            if key in self:
-                new_obj[key] = torch.zeros_like(self[key])
-            else:
-                warnings.warn(f"Key {key} not found in ActivationDict. Skipping.")
-
-        return new_obj
-
     def extract_positions(self, keys: Optional[list[LayerComponent]] = None) -> Self:
-        new_obj = type(self)(self.config, self.positions)
+        new_obj = empty_dict_like(self)
         new_obj.value_type = self.value_type
         new_obj.attention_mask = self.attention_mask
 
@@ -336,7 +324,7 @@ class ActivationDict(ArithmeticOperation):
         return new_obj
 
     def get_grads(self, keys: Optional[list[LayerComponent]] = None) -> Self:
-        new_obj = type(self)(self.config, self.positions)
+        new_obj = empty_dict_like(self)
         new_obj.value_type = "gradient"
         new_obj.attention_mask = self.attention_mask
 

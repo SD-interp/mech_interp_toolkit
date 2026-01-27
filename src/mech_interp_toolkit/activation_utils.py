@@ -4,6 +4,7 @@ import torch
 from nnsight import NNsight
 
 from .activation_dict import ActivationDict, LayerComponent
+from .utils import empty_dict_like
 
 
 def get_activations(
@@ -69,3 +70,12 @@ def locate_layer_component(model: NNsight, layer_component: LayerComponent) -> A
     else:
         raise ValueError("component must be one of {'attn', 'mlp', 'z', 'layer_in', 'layer_out'}")
     return comp
+
+
+def concat_activations(list_activations: list[ActivationDict], **kwargs) -> ActivationDict:
+    new_obj = empty_dict_like(list_activations[0])
+
+    for key in new_obj.keys():
+        new_obj[key] = torch.cat([activation[key] for activation in list_activations], **kwargs)
+
+    return new_obj

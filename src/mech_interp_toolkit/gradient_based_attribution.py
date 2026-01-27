@@ -14,7 +14,7 @@ from .activation_utils import (
     locate_layer_component,
 )
 from .linear_probes import LinearProbe
-from .utils import get_layer_components
+from .utils import empty_dict_like, get_layer_components
 
 
 def _validate_embeddings(
@@ -117,6 +117,8 @@ def simple_integrated_gradients(
             with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
                 logits = model.lm_head.output.save()  # type: ignore
                 metric = metric_fn(logits)
+                if metric.ndim != 0:
+                    raise ValueError("Metric function must return a scalar.")
                 metric.backward()
 
         if interpolated_embeddings.grad is None:
@@ -126,9 +128,10 @@ def simple_integrated_gradients(
         _cleanup_memory()
 
     integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1)
-    output = ActivationDict(model.model.config, slice(None))
+    output = ActivationDict(model.model.config, slice(None), "simple_ig_scores")
     output[(0, "layer_in")] = integrated_grads
-    output.value_type = "simple_ig_scores"
+    model.model.zero_grad(set_to_none=True)
+
     return output
 
 
@@ -160,7 +163,7 @@ def edge_attribution_patching(
     input_activations = get_activations(model, input_dict, layer_components)
     baseline_activations = get_activations(model, baseline_dict, layer_components)
 
-    activation_cache = ActivationDict(model.model.config, slice(None))
+    activation_cache = empty_dict_like(input_activations)
 
     with model.trace() as tracer:
         with tracer.invoke(**grad_inputs):
@@ -172,15 +175,17 @@ def edge_attribution_patching(
             logits = model.lm_head.output.save()  # type: ignore
             metric = metric_fn(logits)
             if metric.ndim != 0:
-                metric = metric.sum()
+                raise ValueError("Metric function must return a scalar.")
             metric.backward()
 
     grads = activation_cache.get_grads()
 
     eap_scores = ((input_activations - baseline_activations) * grads).apply(torch.sum, dim=-1)
-    eap_scores.value_type = "eap_scores"
 
+    model.model.zero_grad(set_to_none=True)
+    eap_scores.value_type = "eap_scores"
     _cleanup_memory()
+
     return eap_scores
 
 
@@ -202,13 +207,11 @@ def eap_integrated_gradients(
 
     layer_components = get_layer_components(model)
 
-    input_activations = get_activations(model, input_dict, [(0, "layer_in")] + layer_components)
-    baseline_activations = get_activations(
-        model, baseline_dict, [(0, "layer_in")] + layer_components
-    )
+    input_activations = get_activations(model, input_dict, layer_components)
+    baseline_activations = get_activations(model, baseline_dict, layer_components)
 
-    input_embeddings = input_activations[(0, "layer_in")]
-    baseline_embeddings = baseline_activations[(0, "layer_in")]
+    input_embeddings = get_embeddings_dict(model, input_dict)["inputs_embeds"]
+    baseline_embeddings = get_embeddings_dict(model, baseline_dict)["inputs_embeds"]
 
     _validate_embeddings(input_embeddings, baseline_embeddings)
 
@@ -217,7 +220,7 @@ def eap_integrated_gradients(
 
     synthetic_input_dict = _prepare_synthetic_inputs(input_dict)
     alphas = _get_alpha_values(steps, input_embeddings.dtype)
-    accumulated_grads = input_activations.zeros_like(layer_components)
+    accumulated_grads = input_activations.zeros_like()
 
     for alpha in alphas:
         interpolated_embeddings = (
@@ -227,7 +230,7 @@ def eap_integrated_gradients(
         )
         synthetic_input_dict["inputs_embeds"] = interpolated_embeddings
 
-        dummy_activation_cache = ActivationDict(model.model.config, slice(None))
+        dummy_activation_cache = empty_dict_like(accumulated_grads)
 
         with model.trace() as tracer:
             with tracer.invoke(**synthetic_input_dict):
@@ -239,7 +242,7 @@ def eap_integrated_gradients(
                 logits = model.lm_head.output.save()  # type: ignore
                 metric = metric_fn(logits)
                 if metric.ndim != 0:
-                    metric = metric.sum()
+                    raise ValueError("Metric function must return a scalar.")
                 metric.backward()
 
         temp_grads = dummy_activation_cache.get_grads()
@@ -251,8 +254,9 @@ def eap_integrated_gradients(
     eap_ig_scores = ((input_activations - baseline_activations) * accumulated_grads).apply(
         torch.sum, dim=-1
     )
-
     eap_ig_scores.value_type = "eap_ig_scores"
+    model.model.zero_grad(set_to_none=True)
+
     return eap_ig_scores
 
 
@@ -269,6 +273,7 @@ def simple_ig_with_probes(
     Implements the method from "Axiomatic Attribution for Deep Networks" by Sundararajan et al., 2017.
     https://arxiv.org/abs/1703.01365
     """
+    # Improvement: Spilt the model at probe location and add the probe as a nn.Module layer
 
     if not torch.is_grad_enabled():
         raise RuntimeError(
@@ -318,7 +323,7 @@ def simple_ig_with_probes(
 
                 metric = metric_fn(probe_output)
                 if metric.ndim != 0:
-                    metric = metric.sum()
+                    raise ValueError("Metric function must return a scalar.")
                 metric.backward()
 
         if interpolated_embeddings.grad is None:
@@ -328,9 +333,10 @@ def simple_ig_with_probes(
         _cleanup_memory()
 
     integrated_grads = ((input_embeddings - baseline_embeddings) * accumulated_grads).sum(dim=-1)
-    output = ActivationDict(model.model.config, slice(None))
+    output = ActivationDict(model.model.config, slice(None), "ig_with_probe_scores")
     output[(0, "layer_in")] = integrated_grads
-    output.value_type = "ig_with_probe_scores"
+    model.model.zero_grad(set_to_none=True)
+
     return output
 
 
@@ -346,6 +352,8 @@ def eap_ig_with_probes(
     Computes EAP integrated gradients w.r.t. layer components. Metric function is applied to the output of the linear probe.
     Combines EAP-IG methodology with linear probe outputs.
     """
+
+    # Improvement: Spilt the model at probe location and add the probe as a nn.Module layer
 
     if not torch.is_grad_enabled():
         raise RuntimeError(
@@ -369,7 +377,7 @@ def eap_ig_with_probes(
 
     synthetic_inputs = _prepare_synthetic_inputs(input_dict)
     alphas = _get_alpha_values(steps, input_embeddings.dtype)
-    accumulated_grads = input_activations.zeros_like(layer_components)
+    accumulated_grads = input_activations.zeros_like()
 
     for alpha in alphas:
         interpolated_embeddings = (
@@ -409,7 +417,7 @@ def eap_ig_with_probes(
 
                 metric = metric_fn(probe_output)
                 if metric.ndim != 0:
-                    metric = metric.sum()
+                    raise ValueError("Metric function must return a scalar.")
                 metric.backward()
 
         temp_grads = dummy_activation_cache.get_grads()
@@ -421,6 +429,7 @@ def eap_ig_with_probes(
     eap_ig_scores = ((input_activations - baseline_activations) * accumulated_grads).apply(
         torch.sum, dim=-1
     )
-
     eap_ig_scores.value_type = "eap_ig_with_probe_scores"
+    model.model.zero_grad(set_to_none=True)
+
     return eap_ig_scores

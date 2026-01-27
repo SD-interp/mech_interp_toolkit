@@ -1,6 +1,7 @@
 import random
 from collections.abc import Sequence
-from typing import Optional, Tuple, Union, cast
+from copy import copy
+from typing import Any, Optional, Tuple, TypeVar, Union, cast
 
 import numpy as np
 import torch
@@ -13,6 +14,9 @@ from transformers import (
 )
 
 from .tokenizer import ChatTemplateTokenizer
+
+type LayerComponent = tuple[int, str]
+T = TypeVar("T", bound=dict[LayerComponent, Any], covariant=True)
 
 
 def set_global_seed(seed: int = 0) -> None:
@@ -93,7 +97,7 @@ def get_logit_difference(
 
 def regularize_position(
     position: Union[int, slice, Sequence, None],
-) -> Union[list[int], slice, Sequence]:
+) -> list[int] | slice | Sequence:
     if isinstance(position, int):
         position = [position]
     elif position is None:
@@ -143,3 +147,21 @@ def get_default_device() -> str:
         The device string ('cuda' or 'cpu').
     """
     return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def empty_dict_like(dict_like: T) -> T:
+    new_obj = copy(dict_like)
+
+    for key in new_obj.keys():
+        new_obj[key] = None
+
+    return new_obj
+
+
+def zeros_dict_like(dict_like: T) -> T:
+    new_obj = copy(dict_like)
+
+    for key in new_obj.keys():
+        new_obj[key] = torch.zeros_like(new_obj[key])
+
+    return new_obj
