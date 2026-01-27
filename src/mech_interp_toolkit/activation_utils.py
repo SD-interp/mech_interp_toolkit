@@ -1,10 +1,14 @@
+import warnings
+from collections.abc import Sequence
 from typing import Any, cast
 
 import torch
 from nnsight import NNsight
 
 from .activation_dict import ActivationDict, LayerComponent
-from .utils import empty_dict_like
+from .utils import empty_dict_like, regularize_position
+
+type Position = slice | int | Sequence | None
 
 
 def get_activations(
@@ -12,13 +16,19 @@ def get_activations(
     inputs: dict[str, torch.Tensor],
     layer_components: list[LayerComponent],
     retain_grads: bool = True,
+    positions: Position = None,
 ) -> ActivationDict:
-    output = ActivationDict(model.model.config, slice(None))
+    positions = regularize_position(positions)
+    output = ActivationDict(model.model.config, positions=positions)
     with model.trace() as tracer:
         with tracer.invoke(**inputs):
             for layer_component in layer_components:
-                output[layer_component] = locate_layer_component(model, layer_component).save()  # type: ignore
+                output[layer_component] = locate_layer_component(model, layer_component)[
+                    :, positions, :
+                ].save()
                 if retain_grads:
+                    if positions is not None:
+                        warnings.warn("retain_grads is set to True, setting positions to None")
                     output[layer_component].requires_grad_()
                     output[layer_component].retain_grad()
             tracer.stop()
