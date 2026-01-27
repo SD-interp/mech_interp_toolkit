@@ -276,7 +276,7 @@ class ActivationDict(ArithmeticOperation):
             base_mask = self.attention_mask.bool()
 
             def apply_func(x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-                mask = base_mask
+                mask = base_mask.to(x.device)
                 while mask.ndim < x.ndim:
                     mask = mask.unsqueeze(-1)
 
