@@ -149,19 +149,29 @@ def get_default_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def empty_dict_like(dict_like: T) -> T:
+def _fill_dict_like(dict_like: T, value: Optional[float | int]) -> T:
     new_obj = copy(dict_like)
 
     for key in new_obj.keys():
-        new_obj[key] = None
+        if value is None:
+            new_obj[key] = None
+        else:
+            new_obj[key] = torch.full_like(new_obj[key], value)
 
     return new_obj
+
+
+def empty_dict_like(dict_like: T) -> T:
+    return _fill_dict_like(dict_like, None)
 
 
 def zeros_dict_like(dict_like: T) -> T:
-    new_obj = copy(dict_like)
+    return _fill_dict_like(dict_like, 0.0)
 
-    for key in new_obj.keys():
-        new_obj[key] = torch.zeros_like(new_obj[key])
 
-    return new_obj
+def ones_dict_like(dict_like: T) -> T:
+    return _fill_dict_like(dict_like, 1.0)
+
+
+def full_dict_like(dict_like: T, value: float | int) -> T:
+    return _fill_dict_like(dict_like, value)

@@ -178,7 +178,7 @@ class ActivationDict(ArithmeticOperation):
         self.fused_heads = True
         self.positions = regularize_position(positions)
         self.value_type = value_type  # e.g., 'activation' or 'gradient' or 'scores'
-        self.attention_mask = torch.tensor([])  # Placeholder for attention mask
+        self.attention_mask = torch.tensor([]).cuda()  # Placeholder for attention mask
 
     def empty_like(self) -> Self:
         return empty_dict_like(self)
@@ -273,6 +273,13 @@ class ActivationDict(ArithmeticOperation):
         if mask_aware:
             warnings.warn("Using .apply() with mask_aware is not grad safe")
 
+            # Check if attention mask is properly set
+            if self.attention_mask.numel() == 0:
+                raise ValueError(
+                    "attention_mask must be set before using mask_aware=True. "
+                    "Set it via: activation_dict.attention_mask = your_mask"
+                )
+
             base_mask = self.attention_mask.bool()
 
             def apply_func(x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
@@ -295,17 +302,20 @@ class ActivationDict(ArithmeticOperation):
 
     def cuda(self) -> Self:
         """Moves all activation tensors to the GPU."""
+        self.attention_mask = self.attention_mask.cuda()
         for key in self.keys():
             self[key] = self[key].cuda()
         return self
 
     def cpu(self) -> Self:
         """Moves all activation tensors to the CPU."""
+        self.attention_mask = self.attention_mask.cpu()
         for key in self.keys():
             self[key] = self[key].cpu()
         return self
 
     def extract_positions(self, keys: Optional[list[LayerComponent]] = None) -> Self:
+        # TODO: Also update attention mask
         new_obj = empty_dict_like(self)
         new_obj.value_type = self.value_type
         new_obj.attention_mask = self.attention_mask

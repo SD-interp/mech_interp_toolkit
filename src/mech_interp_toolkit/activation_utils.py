@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import torch
 from nnsight import NNsight
+from torch.nn import functional as F  # noqa: N812
 
 from .activation_dict import ActivationDict, LayerComponent
 from .utils import empty_dict_like, regularize_position
@@ -82,10 +83,43 @@ def locate_layer_component(model: NNsight, layer_component: LayerComponent) -> A
     return comp
 
 
-def concat_activations(list_activations: list[ActivationDict], **kwargs) -> ActivationDict:
+def _pad_and_concat(tensors, padding_value, dim):
+    dim = dim % tensors[0].ndim
+    max_len = max(t.shape[dim] for t in tensors)
+
+    padded = []
+    ndim = tensors[0].ndim
+
+    for t in tensors:
+        pad_len = max_len - t.shape[dim]
+        if pad_len > 0:
+            pad = [0, 0] * ndim
+            # left-padding: put pad_len on the "left" side of `dim`
+            pad[2 * (ndim - dim - 1)] = pad_len
+            t = F.pad(t, pad, value=padding_value)
+        padded.append(t)
+
+    return torch.cat(padded, dim=0)
+
+
+def concat_activations(list_activations: list[ActivationDict], pad_value=None) -> ActivationDict:
     new_obj = empty_dict_like(list_activations[0])
 
+    if new_obj.attention_mask.numel() > 0:
+        new_obj.attention_mask = _pad_and_concat(
+            [activation.attention_mask for activation in list_activations],
+            padding_value=0,
+            dim=1,
+        )
+
     for key in new_obj.keys():
-        new_obj[key] = torch.cat([activation[key] for activation in list_activations], **kwargs)
+        if pad_value is None:
+            new_obj[key] = torch.cat([activation[key] for activation in list_activations])
+        else:
+            new_obj[key] = _pad_and_concat(
+                [activation[key] for activation in list_activations],
+                padding_value=pad_value,
+                dim=1,
+            )
 
     return new_obj
