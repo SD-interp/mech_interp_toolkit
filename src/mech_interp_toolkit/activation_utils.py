@@ -123,3 +123,12 @@ def concat_activations(list_activations: list[ActivationDict], pad_value=None) -
             )
 
     return new_obj
+
+
+def expand_mask(mask: torch.Tensor, expansion: int):
+    batch_size, seq_len = mask.shape
+
+    padding = torch.zeros((batch_size, expansion))
+    merged_tensor = torch.cat([padding, mask], dim=1)
+
+    return merged_tensor[:, :seq_len]
