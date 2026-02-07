@@ -142,6 +142,7 @@ def edge_attribution_patching(
     baseline_dict: dict[str, torch.Tensor],
     compute_grad_at: Literal["clean", "corrupted"] = "clean",
     metric_fn: Callable = torch.mean,
+    include_block_outputs: bool = False,
 ) -> ActivationDict:
     """
     Computes edge attributions for attention heads using simple gradient x activation.
@@ -150,7 +151,7 @@ def edge_attribution_patching(
     if not torch.is_grad_enabled():
         raise RuntimeError("EAP requires gradient computation. Run with torch.enable_grad()")
 
-    layer_components = get_layer_components(model)
+    layer_components = get_layer_components(model, include_block_outputs=include_block_outputs)
 
     # Determine which inputs to use for gradient computation
     if compute_grad_at == "clean":
@@ -196,6 +197,7 @@ def eap_integrated_gradients(
     baseline_dict: dict[str, torch.Tensor],
     metric_fn: Callable = torch.mean,
     steps: int = 5,
+    include_block_outputs: bool = False,
 ) -> ActivationDict:
     """
     Computes integrated gradients for edge attributions.
@@ -206,7 +208,7 @@ def eap_integrated_gradients(
     if not torch.is_grad_enabled():
         raise RuntimeError("EAP-IG requires gradient computation. Run with torch.enable_grad()")
 
-    layer_components = get_layer_components(model)
+    layer_components = get_layer_components(model, include_block_outputs=include_block_outputs)
 
     input_activations = get_activations(model, input_dict, layer_components)
     baseline_activations = get_activations(model, baseline_dict, layer_components)
@@ -348,6 +350,7 @@ def eap_ig_with_probes(
     probe: LinearProbe,
     metric_fn: Callable = torch.mean,
     steps: int = 50,
+    include_block_outputs: bool = False,
 ) -> ActivationDict:
     """
     Computes EAP integrated gradients w.r.t. layer components. Metric function is applied to the output of the linear probe.
@@ -371,7 +374,9 @@ def eap_ig_with_probes(
     )
 
     # Get layer components up to probe location
-    layer_components = get_layer_components(model, stop_at=probe_location)
+    layer_components = get_layer_components(
+        model, stop_at=probe_location, include_block_outputs=include_block_outputs
+    )
 
     input_activations = get_activations(model, input_dict, layer_components)
     baseline_activations = get_activations(model, baseline_dict, layer_components)
