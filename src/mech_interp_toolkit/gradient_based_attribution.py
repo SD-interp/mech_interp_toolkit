@@ -61,13 +61,14 @@ def _setup_probe_components(
         raise RuntimeError("probe.location cannot be None.")
     probe_location, probe_component = probe.location
     dtype = input_embeddings.dtype
+    device = input_embeddings.device
 
     if probe.weight is None or probe.bias is None:
         raise RuntimeError("probe.weight and probe.bias cannot be None.")
 
-    probe_weight = torch.tensor(probe.weight).to("cuda:0").to(dtype)
+    probe_weight = torch.tensor(probe.weight, dtype=dtype, device=device)
     probe_weight.requires_grad_(True)
-    probe_bias = torch.tensor(probe.bias).to("cuda:0").to(dtype)
+    probe_bias = torch.tensor(probe.bias, dtype=dtype, device=device)
     probe_bias.requires_grad_(True)
 
     return (probe_location, probe_component), probe_weight, probe_bias

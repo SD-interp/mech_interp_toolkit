@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Self
+from typing import Literal, Self
 
 import einops
 import numpy as np
@@ -32,14 +32,14 @@ class LinearProbe:
         else:
             raise ValueError("target_type must be 'classification' or 'regression'")
 
-        self.weight: Optional[np.ndarray] = None
-        self.bias: Optional[np.ndarray | float] = None
+        self.weight: np.ndarray | None = None
+        self.bias: np.ndarray | float | None = None
 
-        self.location: Optional[LayerComponent] = None
+        self.location: LayerComponent | None = None
 
     def _process_batch(
-        self, inputs: np.ndarray, target: Optional[np.ndarray], mask: Optional[np.ndarray] = None
-    ) -> tuple[np.ndarray, Optional[np.ndarray]]:
+        self, inputs: np.ndarray, target: np.ndarray | None, mask: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray | None]:
         """Helper to flatten/broadcast a specific batch (Train or Test)."""
 
         positions = inputs.shape[1]
@@ -77,7 +77,7 @@ class LinearProbe:
 
     def prepare_data(
         self, activations: ActivationDict, target: torch.Tensor | np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
         if len(activations) != 1:
             raise ValueError("Only single components are supported")
 
@@ -164,7 +164,7 @@ class LinearProbe:
     def predict(
         self,
         activations: ActivationDict,
-        target: Optional[torch.Tensor | np.ndarray] = None,
+        target: torch.Tensor | np.ndarray | None = None,
         label="Inference",
     ) -> np.ndarray:
         if self.weight is None:  # Simple check

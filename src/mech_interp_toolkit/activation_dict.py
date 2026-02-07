@@ -2,7 +2,7 @@ import warnings
 from abc import ABC
 from collections.abc import Sequence
 from copy import deepcopy
-from typing import Callable, Optional, Self
+from typing import Callable, Self
 
 import einops
 import torch
@@ -314,7 +314,7 @@ class ActivationDict(ArithmeticOperation):
             self[key] = self[key].cpu()
         return self
 
-    def extract_positions(self, keys: Optional[list[LayerComponent]] = None) -> Self:
+    def extract_positions(self, keys: list[LayerComponent] | None = None) -> Self:
         # TODO: Also update attention mask
         new_obj = empty_dict_like(self)
         new_obj.value_type = self.value_type
@@ -333,7 +333,7 @@ class ActivationDict(ArithmeticOperation):
 
         return new_obj
 
-    def get_grads(self, keys: Optional[list[LayerComponent]] = None) -> Self:
+    def get_grads(self, keys: list[LayerComponent] | None = None) -> Self:
         new_obj = empty_dict_like(self)
         new_obj.value_type = "gradient"
         new_obj.attention_mask = self.attention_mask

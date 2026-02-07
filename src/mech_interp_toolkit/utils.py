@@ -1,7 +1,7 @@
 import random
 from collections.abc import Sequence
 from copy import copy
-from typing import Any, Optional, Tuple, TypeVar, Union, cast
+from typing import Any, Tuple, TypeVar, Union, cast
 
 import numpy as np
 import torch
@@ -37,7 +37,8 @@ def set_global_seed(seed: int = 0) -> None:
 
 def load_model_tokenizer_config(
     model_name: str,
-    device: Optional[str] = None,
+    device: str | None = None,
+    dtype: str | torch.dtype | None = None,
     padding_side: str = "left",
     attn_type: str = "sdpa",
     suffix: str = "",
@@ -68,7 +69,11 @@ def load_model_tokenizer_config(
         config.output_attentions = True
 
     model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
-    model.eval().to(device)  # type: ignore
+    model = model.eval()
+    if dtype is not None:
+        model = model.to(dtype=dtype, device=device)  # type: ignore
+    else:
+        model = model.to(device)  # type: ignore
     model = NNsight(model)
 
     return model, tokenizer, config
@@ -122,7 +127,9 @@ def get_num_layers(model: NNsight) -> int:
     return cast(int, model.model.config.num_hidden_layers)  # type: ignore
 
 
-def get_layer_components(model: NNsight, stop_at: Optional[int] = None) -> list[tuple[int, str]]:
+def get_layer_components(
+    model: NNsight, stop_at: int | None = None, include_block_outputs=False
+) -> list[tuple[int, str]]:
     """
     Get a list of all (layer, component) tuples for attention and MLP components.
 
@@ -136,7 +143,11 @@ def get_layer_components(model: NNsight, stop_at: Optional[int] = None) -> list[
         n_layers = stop_at + 1
     else:
         n_layers = get_num_layers(model)
-    return [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
+
+    if include_block_outputs:
+        return [(i, c) for i in range(n_layers) for c in ["attn", "mlp", "layer_out"]]
+    else:
+        return [(i, c) for i in range(n_layers) for c in ["attn", "mlp"]]
 
 
 def get_default_device() -> str:
@@ -149,7 +160,7 @@ def get_default_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _fill_dict_like(dict_like: T, value: Optional[float | int]) -> T:
+def _fill_dict_like(dict_like: T, value: float | int | None) -> T:
     new_obj = copy(dict_like)
 
     for key in new_obj.keys():
