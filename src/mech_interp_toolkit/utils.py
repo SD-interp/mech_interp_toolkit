@@ -71,6 +71,14 @@ def load_model_tokenizer_config(
     model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
     model = model.eval()
     if dtype is not None:
+        # Convert string dtype to torch.dtype if necessary
+        if isinstance(dtype, str):
+            # Handle both "float16" and "torch.float16" style strings
+            dtype_str = dtype.replace("torch.", "") if dtype.startswith("torch.") else dtype
+            if hasattr(torch, dtype_str):
+                dtype = getattr(torch, dtype_str)
+            else:
+                raise ValueError(f"Invalid dtype string: {dtype}. Expected torch dtype like 'float16', 'float32', 'bfloat16', etc.")
         model = model.to(dtype=dtype, device=device)  # type: ignore
     else:
         model = model.to(device)  # type: ignore
