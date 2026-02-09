@@ -104,3 +104,27 @@ class ChatTemplateTokenizer:
         formatted_prompts = self._apply_chat_template(prompts, thinking=thinking)
         tokenized = self._encode(formatted_prompts)
         return tokenized
+
+    def __getattr__(self, name: str):
+        """
+        Delegate attribute and method lookups to the underlying tokenizer.
+
+        Args:
+            name (str): The name of the attribute or method.
+
+        Returns:
+            The attribute or method from the underlying tokenizer.
+
+        Raises:
+            AttributeError: If the attribute is not found in the underlying tokenizer.
+        """
+        return getattr(self.tokenizer, name)
+
+    def __dir__(self):
+        """
+        Return a list of attributes including those from the underlying tokenizer.
+
+        Returns:
+            list[str]: A list of attribute names.
+        """
+        return list(set(list(super().__dir__()) + dir(self.tokenizer)))
