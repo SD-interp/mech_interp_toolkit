@@ -42,7 +42,9 @@ def get_embeddings_dict(model: NNsight, inputs: dict[str, torch.Tensor]) -> dict
     if "inputs_embeds" in inputs:
         pass
     else:
-        embeds = get_activations(model, inputs, [(0, "layer_in")])
+        embeds = get_activations(
+            model, inputs, [(0, "layer_in")], retain_grads=False, positions=None
+        )
         inputs.pop("input_ids", None)
         inputs["inputs_embeds"] = embeds[(0, "layer_in")]
     return inputs
