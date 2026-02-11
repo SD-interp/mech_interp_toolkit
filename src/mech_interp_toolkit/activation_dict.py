@@ -146,6 +146,31 @@ class ArithmeticOperation(FreezableDict):
         else:
             raise NotImplementedError("Division not supported for this type.")
 
+    def __matmul__(self, other) -> Self:
+        if isinstance(other, ActivationDict):
+            self.check_compatibility(other)
+            result = empty_dict_like(self)
+            for key in self.keys():
+                if key in other:
+                    result[key] = self[key] @ other[key]
+            return result
+        elif isinstance(other, torch.Tensor):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = self[key] @ other
+            return result
+        else:
+            raise NotImplementedError("Matrix multiplication not supported for this type.")
+
+    def __rmatmul__(self, other) -> Self:
+        if isinstance(other, torch.Tensor):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = other @ self[key]
+            return result
+        else:
+            raise NotImplementedError("Matrix multiplication not supported for this type.")
+
 
 class ActivationDict(ArithmeticOperation):
     """
