@@ -12,6 +12,7 @@ __license__ = "MIT"
 
 
 from . import (
+    activation_utils,
     direct_logit_attribution,
     gradient_based_attribution,
     linear_probes,
@@ -21,6 +22,7 @@ from . import (
 )
 
 __all__ = [
+    "activation_utils",
     "tokenizer",
     "utils",
     "direct_logit_attribution",

@@ -18,7 +18,8 @@ def get_activations(
     layer_components: list[LayerComponent],
     retain_grads: bool = True,
     positions: Position = None,
-) -> ActivationDict:
+    return_logits: bool = False,
+) -> ActivationDict | tuple[ActivationDict, torch.Tensor]:
     positions = regularize_position(positions)
     output = ActivationDict(model.model.config, positions=positions)
     with model.trace() as tracer:
@@ -32,9 +33,54 @@ def get_activations(
                         warnings.warn("retain_grads is set to True, setting positions to None")
                     output[layer_component].requires_grad_()
                     output[layer_component].retain_grad()
+            if return_logits:
+                logits = model.lm_head.output.save()
             tracer.stop()
     output.attention_mask = inputs["attention_mask"]
     output.value_type = "activation"
+    if return_logits:
+        return output, logits
+    return output
+
+
+def patch_activations(
+    model: NNsight,
+    inputs: dict[str, torch.Tensor],
+    patch_values: ActivationDict,
+    layer_components: list[LayerComponent],
+    retain_grads: bool = True,
+    positions: Position = None,
+    return_logits: bool = False,
+) -> ActivationDict | tuple[ActivationDict, torch.Tensor]:
+    positions = regularize_position(positions)
+    patch_positions = patch_values.positions
+    layer_components_set = set(layer_components)
+    # Merge patch and capture targets into a single execution-ordered sequence
+    _ordering = ActivationDict(model.model.config, positions=positions)
+    for lc in set(layer_components) | set(patch_values.keys()):
+        _ordering[lc] = torch.empty(0)
+    all_components = list(_ordering.reorganize().keys())
+
+    output = ActivationDict(model.model.config, positions=positions)
+    with model.trace() as tracer:
+        with tracer.invoke(**inputs):
+            for layer_component in all_components:
+                comp = locate_layer_component(model, layer_component)
+                if layer_component in patch_values:
+                    comp[:, patch_positions, :] = patch_values[layer_component]
+                if layer_component in layer_components_set:
+                    output[layer_component] = comp[:, positions, :].save()
+                    if retain_grads:
+                        raise NotImplementedError(
+                            "Gradient computation with patched activations not yet supported"
+                        )
+            if return_logits:
+                logits = model.lm_head.output.save()
+            tracer.stop()
+    output.attention_mask = inputs["attention_mask"]
+    output.value_type = "activation"
+    if return_logits:
+        return output, logits
     return output
 
 
