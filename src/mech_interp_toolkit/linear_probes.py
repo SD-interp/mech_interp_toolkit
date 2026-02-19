@@ -34,6 +34,7 @@ class LinearProbe:
 
         self.weight: np.ndarray | None = None
         self.bias: np.ndarray | float | None = None
+        self.scaler = None
 
         self.location: LayerComponent | None = None
 

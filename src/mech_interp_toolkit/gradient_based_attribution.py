@@ -1,6 +1,6 @@
 import gc
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 from einops import einsum
@@ -55,7 +55,7 @@ def _get_alpha_values(steps: int, dtype: torch.dtype) -> torch.Tensor:
 def _setup_probe_components(
     probe: LinearProbe,
     input_embeddings: torch.Tensor,
-) -> tuple[tuple[int, str], torch.Tensor, torch.Tensor]:
+) -> tuple[tuple[int, str], torch.Tensor, torch.Tensor, Any]:
     """Extract and prepare probe location, weight, and bias tensors."""
     if probe.location is None:
         raise RuntimeError("probe.location cannot be None.")
@@ -71,7 +71,7 @@ def _setup_probe_components(
     probe_bias = torch.tensor(probe.bias, dtype=dtype, device=device)
     probe_bias.requires_grad_(True)
 
-    return (probe_location, probe_component), probe_weight, probe_bias
+    return (probe_location, probe_component), probe_weight, probe_bias, probe.scaler
 
 
 def _cleanup_memory() -> None:
@@ -288,7 +288,7 @@ def simple_ig_with_probes(
 
     _validate_embeddings(input_embeddings, baseline_embeddings)
 
-    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(
+    (probe_location, probe_component), probe_weight, probe_bias, scaler = _setup_probe_components(
         probe, input_embeddings
     )
 
@@ -306,7 +306,7 @@ def simple_ig_with_probes(
         with model.trace() as tracer:
             with tracer.invoke(**synthetic_inputs, inputs_embeds=interpolated_embeddings):
                 acts = locate_layer_component(model, (probe_location, probe_component)).save()
-
+                acts = scaler(acts)
                 probe_output = einsum(
                     acts,
                     probe_weight.T,
@@ -369,7 +369,7 @@ def eap_ig_with_probes(
 
     _validate_embeddings(input_embeddings, baseline_embeddings)
 
-    (probe_location, probe_component), probe_weight, probe_bias = _setup_probe_components(
+    (probe_location, probe_component), probe_weight, probe_bias, scaler = _setup_probe_components(
         probe, input_embeddings
     )
 
@@ -403,6 +403,7 @@ def eap_ig_with_probes(
                     dummy_activation_cache[layer_component] = comp
 
                 acts = locate_layer_component(model, (probe_location, probe_component)).save()
+                acts = scaler(acts)
 
                 probe_output = einsum(
                     acts,
